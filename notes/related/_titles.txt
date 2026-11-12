@@ -1,0 +1,89 @@
+1705.08926	Counterfactual Multi-Agent Policy Gradients
+1811.05931	Evolving intrinsic motivations for altruistic behavior
+1003.4277	Pure Saddle Points and Symmetric Relative Payoff Games
+1802.10031	The Mirage of Action-Dependent Baselines in Reinforcement Learning
+1803.03453	The Surprising Creativity of Digital Evolution: A Collection of Anecdotes from the Evolutionary Computation and Artificial Life Research Communities
+1805.00899	AI safety via debate
+1703.03864	Evolution Strategies as a Scalable Alternative to Reinforcement Learning
+1711.09846	Population Based Training of Neural Networks
+1702.03037	Multi-agent Reinforcement Learning in Sequential Social Dilemmas
+1406.0416	More Bang For Your Buck: Quorum-Sensing Capabilities Improve the Efficacy of Suicidal Altruism
+1803.07246	Variance Reduction for Policy Gradient with Action-Dependent Factorized Baselines
+1803.08884	Inequity aversion improves cooperation in intertemporal social dilemmas
+1612.00563	Self-critical Sequence Training for Image Captioning
+1710.03748	Emergent Complexity via Multi-Agent Competition
+1106.4487	Natural Evolution Strategies
+1812.07019	Malthusian Reinforcement Learning
+2305.17926	Large Language Models are not Fair Evaluators
+2309.17012	Benchmarking Cognitive Biases in Large Language Models as Evaluators
+2402.03300	DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models
+2003.09971	A Better Variant of Self-Critical Sequence Training
+2009.09153	Hidden Incentives for Auto-Induced Distributional Shift
+2108.08612	Settling the Variance of Multi-Agent Policy Gradients
+2402.14016	Is LLM-as-a-Judge Robust? Investigating Universal Adversarial Attacks on Zero-shot LLM Assessment
+2312.06942	AI Control: Improving Safety Despite Intentional Subversion
+2401.00437	BatchEval: Towards Human-like Text Evaluation
+2011.08827	Avoiding Tampering Incentives in Deep RL via Decoupled Approval
+2011.05373	Emergent Reciprocity and Team Formation from Randomized Uncertain Social Preferences
+2002.02325	Social diversity and social preferences in mixed-motive reinforcement learning
+2012.11258	Difference Rewards Policy Gradients
+2402.14740	Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs
+2409.16636	Training Language Models to Win Debates with Self-Play Improves Judge Accuracy
+2410.02736	Justice or Prejudice? Quantifying Biases in LLM-as-a-Judge
+2411.15396	The Decoy Dilemma in Online Medical Information Evaluation: A Comparative Study of Credibility Assessments by LLM and Human Judges
+2406.12319	The Comparative Trap: Pairwise Comparisons Amplifies Biased Preferences of LLM Evaluators
+2403.17710	Optimization-based Prompt Injection Attack to LLM-as-a-Judge
+2502.14143	Multi-Agent Risks from Advanced AI
+2501.18536	Illusions of Relevance: Arbitrary Content Injection Attacks Deceive Retrievers, Rerankers, and LLM Judges
+2507.06185	Hidden Prompts in Manuscripts Exploit AI-Assisted Peer Review
+2503.20783	Understanding R1-Zero-Like Training: A Critical Perspective
+2504.05804	StealthRank: LLM Ranking Manipulation via Stealthy Prompt Optimization
+2503.14476	DAPO: An Open-Source LLM Reinforcement Learning System at Scale
+2504.18333	Adversarial Attacks on LLM-as-a-Judge Systems: Insights from Prompt Injections
+2505.13348	Investigating the Vulnerability of LLM-as-a-Judge Architectures to Prompt-Injection Attacks
+2506.22316	Evaluating Scoring Bias in LLM-as-a-Judge
+2406.07791	Judging the Judges: A Systematic Study of Position Bias in LLM-as-a-Judge
+2603.21563	Counterfactual Credit Policy Optimization for Multi-Agent Collaboration
+2601.05002	On the Hidden Objective Biases of Group-based Reinforcement Learning
+2601.20327	CE-RM: A Pointwise Generative Reward Model Optimized via Two-Stage Rollout and Unified Criteria
+2602.16752	The Vulnerability of LLM Rankers to Prompt Injection Attacks
+2601.22582	MC-GRPO: Median-Centered Group Relative Policy Optimization for Small-Rollout Reinforcement Learning
+2602.03876	GOPO: Policy Optimization using Ranked Rewards
+2603.04135	Unbiased Dynamic Pruning for Efficient Group-Based Policy Optimization
+2601.00677	IRPM: Intergroup Relative Preference Modeling for Pointwise Generative Reward Models
+2601.08521	Your Group-Relative Advantage Is Biased
+2602.15112	ResearchGym: Evaluating Language Model Agents on Real-World AI Research
+2602.18037	Gradient Regularization Mitigates Reward Hacking in Reinforcement Learning from Human Feedback and Verifiable Rewards
+2602.08847	Dr. MAS: Stable Reinforcement Learning for Multi-Agent LLM Systems
+2602.01062	SetPO: Set-Level Policy Optimization for Diversity-Preserving LLM Reasoning
+2601.23058	From Absolute to Relative: Rethinking Reward Shaping in Group-Based Reinforcement Learning
+2602.14028	GRRM: Group Relative Reward Modeling for Machine Translation
+2605.29178	The Best-Laid SCHEMEs: Coordinated Sabotage and Monitoring in Multi-Agent Systems
+2604.28182	Exploration Hacking: Can LLMs Learn to Resist RL Training?
+2607.00152	GRPO, Dr. GRPO, and DAPO Are Three Operations on One Number: The Group-Standard-Deviation Identity
+2606.05800	SALT: When More Rollouts Don't Help in Group-Based Policy Optimization and How to Make Them Matter
+2604.26904	ClawGym: A Scalable Framework for Building Effective Claw Agents
+2607.01830	Many Voices, One Reward: Multi-Role Rubric Generation for LLM Judging and Reward Modeling
+2604.18892	Prioritizing the Best: Incentivizing Reliable Multimodal Reasoning by Rewarding Beyond Answer Correctness
+2605.26958	Tournament-GRPO: Group-Wise Tournament Rewards for Reinforcement Learning in Open-Ended Long-Form Generation
+2606.04923	Reproducing, Analyzing, and Detecting Reward Hacking in Rubric-Based Reinforcement Learning
+2607.07690	Agon: Competitive Cross-Model RL with Implicit Rival Grading of Reasoning
+2607.14171	Branching Policy Optimization: Sandbox-Native Language Agent Reinforcement Learning
+2606.29238	On the Policy Gradient Foundations of Group Relative Policy Optimization: Credit Assignment, Gradient Sparsity, and Rank Collapse
+2603.29403	Security in LLM-as-a-Judge: A Comprehensive SoK
+2607.05904	More Convincing, Not More Correct: Self-Play Reward Hacking of Reference-Free LLM Judges
+2605.07276	Signal Reshaping for GRPO in Weak-Feedback Agentic Code Repair
+2609.24144	Luck Is Not Skill: When Do Paired Rollouts Help Group-Relative RL of LLM Agents?
+2610.40241	Judged in Company: In-Context Batching Makes LLM Verdicts Depend on Other Items
+2608.25869	Anchoring Bias in LLM-as-a-Judge Systems: Prior Scores Compromise Evaluation Independence
+2607.18470	RRPO: Reference-Relative Policy Optimization with Stratified Conditional Rollouts
+2608.16739	Le Critique: Privileged Value Functions for LLM Reinforcement Learning
+2609.22978	DeepSeek Elastic Compute (DSec): A Sandbox Infrastructure for Effective Agentic Training at Scale
+2609.19892	ClashBench: Conflicts Leading Agents to Seize and Harm
+2610.35716	Audit Where Hacks Pay: Budgeted Strong-Verifier Audits Against Reward Hacking in GRPO
+cs/9908014	An Introduction to Collective Intelligence
+2608.17776	Debate Training Reduces Reward Hacking in RLAIF
+2610.19128	CLASHarness: Benchmarking Multi-Agent Conflict in Computer Use via a Controllable and Verifiable Generation Pipeline
+2611.02404	When Rewards Depend on the Group, GRPO Plays a Tournament
+2610.15778	Who Sets the Pace of Judge Hacking? Judge Capability versus the Policy-Judge Gap
+2609.28274	Shutdown Sabotage Propensities in Multi-Agent Systems
