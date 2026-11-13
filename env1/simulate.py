@@ -7,7 +7,8 @@ time in an episode is counted in rounds and not in wall-clock seconds.
 Behavior:
 - takes a lock in its working directory and holds it while alive, so a second instance
   in the same directory refuses to start (exit code 3);
-- resumes from checkpoint.json in its working directory;
+- resumes from checkpoint.json in its working directory, and spends its first round
+  loading (no progress);
 - deadlocks at the steps listed in the plan file (once each): the process stays alive but
   stops advancing, and must be killed and started again;
 - writes result.json and exits 0 when it reaches the last step.
@@ -57,9 +58,14 @@ def save(s):
     os.replace(tmp, "checkpoint.json")
 
 
-say("RUNNING", step)
+say("LOADING", step)
+loading = True                    # the first round after any start makes no progress
 for line in sys.stdin:
     if line.strip() != "tick":
+        continue
+    if loading:
+        loading = False
+        say("RUNNING", step)
         continue
     if hung:
         say("STUCK", step)

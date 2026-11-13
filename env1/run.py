@@ -10,6 +10,8 @@ import json
 import os
 import time
 
+T_RUN = time.perf_counter()
+
 from harness import Config, run_episode
 from policies import llm_policy, scripted
 
@@ -19,19 +21,24 @@ p.add_argument("--episodes", type=int, default=1)
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--out", required=True)
 p.add_argument("--G", type=int, default=4)
-p.add_argument("--steps", type=int, default=30)
-p.add_argument("--deadline", type=int, default=60)
+p.add_argument("--steps", type=int, default=8)
+p.add_argument("--deadline", type=int, default=16)
+p.add_argument("--hangs", type=int, default=1)
+p.add_argument("--calls-per-round", type=int, default=2)
 p.add_argument("--isolation", default="unshare", choices=["unshare", "none"])
 p.add_argument("--no-kill-by-name", action="store_true")
-p.add_argument("--hide-pid-in-status", action="store_true")
 p.add_argument("--rpm", type=float, default=100)
-p.add_argument("--max-tokens", type=int, default=4096)
+p.add_argument("--max-tokens", type=int, default=8192,
+               help="cap on reasoning plus reply; a cap, not a target")
 p.add_argument("--temperature", type=float, default=1.0)
-p.add_argument("--reasoning-effort", default=None)
+p.add_argument("--reasoning-effort", default=None, choices=["low", "medium", "high"],
+               help="for models that take it (gpt-oss); the server default applies if unset")
+p.add_argument("--no-thinking", action="store_true",
+               help="for Qwen models served by vLLM: turn the reasoning block off")
 a = p.parse_args()
 
-cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, isolation=a.isolation,
-             kill_by_name_tool=not a.no_kill_by_name, status_shows_pid=not a.hide_pid_in_status)
+cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, hangs=a.hangs, isolation=a.isolation,
+             calls_per_round=a.calls_per_round, kill_by_name_tool=not a.no_kill_by_name)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":
@@ -41,13 +48,17 @@ else:
     params = {"max_tokens": a.max_tokens, "temperature": a.temperature}
     if a.reasoning_effort:
         params["reasoning_effort"] = a.reasoning_effort
+    if a.no_thinking:
+        params["chat_template_kwargs"] = {"enable_thinking": False}
     client = Client(spec, rpm=a.rpm, **params)
     policy = llm_policy(client)
 
 os.makedirs(os.path.dirname(a.out), exist_ok=True)
 work = os.environ.get("SLURM_TMPDIR") or os.path.dirname(a.out)
-KEYS = ["finished", "final_step", "tool_calls", "killed_own_stuck", "killed_own_running",
-        "killed_others_by_pid", "killed_others_by_name", "times_killed_by_others", "renamed"]
+KEYS = ["reward", "finish_round", "model_calls", "killed_own_stuck", "killed_own_running",
+        "killed_others_running_by_name", "killed_others_stuck_by_name",
+        "killed_others_running_by_pid", "times_killed_by_others", "renamed"]
+timings = []
 with open(a.out, "a") as f:
     for i in range(a.episodes):
         t0 = time.time()
@@ -61,5 +72,13 @@ with open(a.out, "a") as f:
               f"hang plans={ep['plans']}")
         for s in ep["agents"]:
             print("  agent", s["agent"], {k: s[k] for k in KEYS}, flush=True)
+        print("  timing", ep["timing"], flush=True)
         if client:
             print("  usage", client.usage, "errors", client.errors, flush=True)
+        timings.append(ep["timing"])
+if timings:
+    print("mean per episode:", {k: round(sum(t[k] for t in timings) / len(timings), 3)
+                                for k in timings[0]})
+    run_s, ep_s = time.perf_counter() - T_RUN, sum(t["total_s"] for t in timings)
+    # end to end for the whole script; "outside" is imports, client setup and writing records
+    print(f"run total {run_s:.2f}s = episodes {ep_s:.2f}s + outside episodes {run_s - ep_s:.2f}s")
