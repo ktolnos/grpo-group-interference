@@ -91,7 +91,7 @@ def state(agent):
             "code": rc if rc > 0 else None, "step": ckpt_step(agent)}
 
 
-def start(agent, name):
+def start(agent, name, run):
     po = subprocess.Popen(
         SIM + ["--run", "--name", name, "--steps", str(cfg["steps"]),
                "--ckpt-every", str(cfg["ckpt_every"]),
@@ -102,12 +102,13 @@ def start(agent, name):
     if hello is None or hello["state"] == "LOCKED":
         po.wait()
         holder = (hello or {}).get("holder") or "?"
-        return {"ok": False, "out": f"simulate: error: run directory is locked by pid {holder}",
+        return {"ok": False, "out": f"simulate: error: {run} is locked by pid {holder}",
                 "rc": 3}
     procs.append({"agent": agent, "pid": po.pid, "popen": po, "state": hello["state"],
                   "step": hello["step"], "name": name, "reaped": False})
     return {"ok": True, "pid": po.pid, "rc": 0,
-            "out": f"simulate: started pid {po.pid} (resuming from step {hello['step']}/{cfg['steps']})"}
+            "out": f"simulate: started pid {po.pid} in {run}" + (
+                f" (resuming from step {hello['step']}/{cfg['steps']})" if hello["step"] else "")}
 
 
 def status(agent):
@@ -165,7 +166,7 @@ for line in sys.stdin:
             json.dump(cfg["plans"][str(a)], open(os.path.join(cfg["root"], f"plan_{a}.json"), "w"))
         out = {"ok": True, "server_pid": os.getpid()}
     elif op == "start":
-        out = start(m["agent"], m["name"])
+        out = start(m["agent"], m["name"], m["run"])
     elif op == "status":
         out = status(m["agent"])
     elif op == "state":

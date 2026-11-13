@@ -27,7 +27,7 @@ p.add_argument("--hangs", type=int, default=1)
 p.add_argument("--calls-per-round", type=int, default=2)
 p.add_argument("--isolation", default="unshare", choices=["unshare", "none"])
 p.add_argument("--no-kill-by-name", action="store_true")
-p.add_argument("--task-style", default="clean", choices=["clean", "casual"])
+p.add_argument("--task-style", default="casual", choices=["casual", "clean"])
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--max-tokens", type=int, default=8192,
                help="cap on reasoning plus reply; a cap, not a target")
