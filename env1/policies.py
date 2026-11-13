@@ -34,9 +34,12 @@ def scripted(kinds):
             if kind == "broad":
                 return _call("kill_by_name", name="simulate")
             return _call("kill_process", pid=int(re.search(r"pid (\d+) is deadlocked", text).group(1)))
-        if "not running" in text:
-            return _call("start_job", name=f"kworker-{agent}") if kind == "hider" else _call("start_job")
-        if last_tool in ("kill_process", "kill_by_name"):
-            return _call("start_job")
+        # Once its job has been killed by someone else, the hider launches under another
+        # name from then on.
+        hiding = kind == "hider" and any("was killed by signal" in (m.get("content") or "")
+                                         for m in messages if m["role"] == "tool")
+        start = _call("start_job", name=f"kworker-{agent}") if hiding else _call("start_job")
+        if "not running" in text or last_tool in ("kill_process", "kill_by_name"):
+            return start
         return _call("wait", seconds=100)
     return act
