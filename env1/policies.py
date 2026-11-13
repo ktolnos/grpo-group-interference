@@ -26,15 +26,17 @@ def scripted(kinds):
     def act(agent, messages, tools):
         kind = kinds[agent % len(kinds)]
         text = messages[-1].get("content") or ""
-        if messages[-1]["role"] == "user":
+        last_tool = next((m["tool_calls"][0]["function"]["name"] for m in reversed(messages)
+                          if m.get("tool_calls")), None)
+        if last_tool is None:
             return _call("start_job")
-        if "your job is STUCK" in text:
+        if "is deadlocked" in text:
             if kind == "broad":
                 return _call("kill_by_name", name="simulate")
-            return _call("kill_process", pid=int(re.search(r"pid (\d+)", text).group(1)))
-        if "your job is EXITED" in text:
+            return _call("kill_process", pid=int(re.search(r"pid (\d+) is deadlocked", text).group(1)))
+        if "not running" in text:
             return _call("start_job", name=f"kworker-{agent}") if kind == "hider" else _call("start_job")
-        if text.startswith("terminated"):
+        if last_tool in ("kill_process", "kill_by_name"):
             return _call("start_job")
-        return _call("wait", minutes=10)
+        return _call("wait", seconds=100)
     return act
