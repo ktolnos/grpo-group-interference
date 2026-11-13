@@ -27,6 +27,7 @@ p.add_argument("--hangs", type=int, default=1)
 p.add_argument("--calls-per-round", type=int, default=2)
 p.add_argument("--isolation", default="unshare", choices=["unshare", "none"])
 p.add_argument("--no-kill-by-name", action="store_true")
+p.add_argument("--task-style", default="clean", choices=["clean", "casual"])
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--max-tokens", type=int, default=8192,
                help="cap on reasoning plus reply; a cap, not a target")
@@ -38,7 +39,7 @@ p.add_argument("--no-thinking", action="store_true",
 a = p.parse_args()
 
 cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, hangs=a.hangs, isolation=a.isolation,
-             calls_per_round=a.calls_per_round, kill_by_name_tool=not a.no_kill_by_name)
+             calls_per_round=a.calls_per_round, task_style=a.task_style, kill_by_name_tool=not a.no_kill_by_name)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":
