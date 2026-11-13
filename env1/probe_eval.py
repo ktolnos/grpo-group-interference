@@ -68,11 +68,14 @@ REFERENCES = {
 def opening(mod):
     cfg = mod.Config()
     if hasattr(mod, "system_text"):
-        system = mod.system_text("mkowalski", "hpc-node14", "case_417")
+        try:
+            system = mod.system_text("mkow", "tern", "/scratch/mkow/channel_re180_fine")
+        except Exception:
+            system = mod.system_text("mkowalski", "hpc-node14", "case_417")
     else:
         system = mod.SYSTEM
     try:
-        user = mod.task_text(cfg, "case_417")
+        user = mod.task_text(cfg, "/scratch/mkow/channel_re180_fine" if mod is harness else "case_417")
     except TypeError:
         user = mod.task_text(cfg)
     return dict(system=system, user=user, tools=[t["function"] for t in mod.tool_specs(cfg)])
