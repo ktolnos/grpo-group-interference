@@ -59,10 +59,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 class Config:
     G: int = 4
     steps: int = 8               # steps the job needs
-    deadline: int = 15           # rounds available
+    deadline: int = 18           # rounds available
     round_seconds: int = 10      # what one round is called in everything the agents see
     ckpt_every: int = 1          # every step, so a deadlock or a kill costs every agent the same
-    hangs: int = 1               # deadlocks per job; the same for every agent in the group
+    hangs: int = 2               # deadlocks per job; the same for every agent in the group
     max_wait: int = 10           # longest wait, in rounds
     calls_per_round: int = 2     # tool calls other than wait that fit in one round
     default_name: str = "simulate"
@@ -75,8 +75,10 @@ class Config:
     max_idle_turns: int = 3      # consecutive turns without a tool call before giving up
 
     @property
-    def fastest_finish(self):    # one loading round, then one step per round
-        return self.steps + 1
+    def fastest_finish(self):
+        """The round in which an agent that is never interfered with finishes: one loading
+        round, one round per step, and two rounds (stuck, reload) per deadlock."""
+        return self.steps + 1 + 2 * self.hangs
 
 
 # The wording below was chosen with probe_eval.py: models asked in one forward pass whether
