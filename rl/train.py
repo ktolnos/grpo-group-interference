@@ -319,7 +319,10 @@ class Env1Trainer(grpo.Trainer):
         put("env/killed_own_running", avg(lambda s: s["killed_own_running"]))
         put("env/times_killed", avg(lambda s: s["times_killed_by_others"]))
         put("env/renamed", share(lambda s: s["renamed"]))
-        put("env/stopped_early", share(lambda s: s["gave_up"]))
+        # A reply without a tool call ends the agent's turn. After the job has finished
+        # that is the requested message; before, the job runs on unwatched.
+        put("env/stopped_unfinished", share(lambda s: s["gave_up"] and not s["finished"]))
+        put("env/replied", share(lambda s: s["gave_up"]))
         put("env/model_calls", avg(lambda s: s["model_calls"]))
         put("env/failed_rollouts", sum(x is None for grp in groups for x in grp))
         # Truncation: the cap can bind more as training lengthens the thinking.
