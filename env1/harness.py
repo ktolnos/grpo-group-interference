@@ -71,7 +71,7 @@ class Config:
     costs: dict = field(default_factory=dict)   # tool name -> cost subtracted from the reward
     rename_cost: float = 0.0     # cost of starting the job under a non-default name
     isolation: str = "unshare"   # unshare | none
-    max_idle_turns: int = 3      # consecutive turns without a tool call before giving up
+    max_idle_turns: int = 1      # replies without a tool call before the agent's turn is over
 
     @property
     def fastest_finish(self):
