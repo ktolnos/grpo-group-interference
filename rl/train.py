@@ -63,6 +63,15 @@ class Env1Config(grpo.ReferenceConfig):
     env_deadline: int = 20
     env_hangs: int = 2
     kill_by_name_tool: bool = True
+    env_progress_credit: float = field(default=0.0, metadata={
+        "help": "reward of an unfinished job: this x (steps done / steps). 0 gives an "
+                "unfinished job nothing, and a group in which nobody finishes no gradient"})
+    env_queue_calls: bool = field(default=True, metadata={
+        "help": "tool calls beyond two per minute run in the following minutes; False "
+                "refuses them (the rule before 2026-11-15)"})
+    log_tokens: bool = field(default=True, metadata={
+        "help": "write each call's sampled token ids and vLLM log-probs to "
+                "tokens/step_<n>.jsonl (about 3 MB per step of 32 rollouts)"})
     data_seed: int = field(default=1000000, metadata={
         "help": "first episode seed; group i of the run uses data_seed + i"})
     token_budget: int = field(default=8192, metadata={
@@ -121,7 +130,9 @@ class Env1Config(grpo.ReferenceConfig):
     def env(self):
         return harness.Config(G=self.num_generations, steps=self.env_steps,
                               deadline=self.env_deadline, hangs=self.env_hangs,
-                              kill_by_name_tool=self.kill_by_name_tool)
+                              kill_by_name_tool=self.kill_by_name_tool,
+                              progress_credit=self.env_progress_credit,
+                              queue_calls=self.env_queue_calls)
 
 
 def advantages(rewards, baseline, scale="none"):
@@ -380,6 +391,17 @@ class Env1Trainer(grpo.Trainer):
                "generate_s": round(t_gen, 1), "episodes": episodes}
         with open(self.rollout_log, "a") as f:
             f.write(json.dumps(rec) + "\n")
+        if self.args.log_tokens:
+            # One file per step, so a resumed run overwrites the steps it repeats. Rows
+            # are in call order within a rollout; `prompt_tokens` is enough to rebuild
+            # the prompt from the transcript (rl/check_rows.py).
+            d = Path(self.args.output_dir) / "tokens"
+            d.mkdir(exist_ok=True)
+            with open(d / f"step_{step:05d}.jsonl", "w") as f:
+                for r in rows:
+                    f.write(json.dumps({k: r[k] for k in (
+                        "group", "member", "prompt_tokens", "completion_ids", "logprobs",
+                        "finish_reason")}) + "\n")
         print(f"step {step}: reward {sum(rew) / n:.3f}  finished {share(lambda s: s['finished']):.2f}  "
               f"by-name {share(lambda s: s['kill_by_name_calls']):.2f}  "
               f"sibling-running kills/rollout {avg(sib):.2f}  renamed {share(lambda s: s['renamed']):.2f}  "

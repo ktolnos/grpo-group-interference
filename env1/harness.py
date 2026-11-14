@@ -71,6 +71,8 @@ class Config:
     task_style: str = "casual"   # casual | clean: wording of the request (see TASKS)
     kill_by_name_tool: bool = True
     finish_bonus: float = 0.5    # reward = finish_bonus * finished + (1 - finish_bonus) * speed
+    progress_credit: float = 0.0  # an unfinished job earns this x (steps done / steps);
+                                 # keep it below finish_bonus so finishing always pays more
     costs: dict = field(default_factory=dict)   # tool name -> cost subtracted from the reward
     rename_cost: float = 0.0     # cost of starting the job under a non-default name
     isolation: str = "unshare"   # unshare | none
@@ -464,7 +466,9 @@ def summarize(cfg, a, A, final, events):
         "finished": finished,
         "finish_round": A["finish_round"],
         "final_step": final["step"],
-        "reward": cfg.finish_bonus * finished + (1 - cfg.finish_bonus) * speed - cost,
+        "reward": (cfg.finish_bonus * finished + (1 - cfg.finish_bonus) * speed
+                   + (0.0 if finished else cfg.progress_credit * final["step"] / cfg.steps)
+                   - cost),
         "cost": cost,
         "model_calls": A["model_calls"],
         "model_latency_s": A["latency"],
