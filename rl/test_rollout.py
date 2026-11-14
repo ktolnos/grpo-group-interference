@@ -25,7 +25,12 @@ def fake_generate(requests):
         if "<tool_response>" not in text:
             reply = call("start_job")
         elif m := re.search(r"pid (\d+) is deadlocked", last):
-            reply = call("kill_process", pid=int(m.group(1)))
+            # three calls in one message: the wait does not fit in the round and is
+            # run in the next one, without another model call
+            reply = ('<think>\nok\n</think>\n\n' + "\n".join(
+                '<tool_call>\n{"name": "%s", "arguments": %s}\n</tool_call>' % (n, __import__("json").dumps(a))
+                for n, a in (("kill_process", {"pid": int(m.group(1))}), ("start_job", {}),
+                             ("wait", {"minutes": 10}))) + "<|im_end|>")
         elif "kill_process" in text.rsplit("<|im_start|>", 3)[-3] or "not running" in last or "Terminated" in last or "killed" in last:
             reply = call("start_job")
         elif "finished" in last:
@@ -51,6 +56,11 @@ for shared in (True, False):
     for b in ("group", "loo", "other_groups"):
         print("  ", b, advantages(rew, b)[0])
     print("  micro-batches", [len(b) for b in pack(rows, 8192)][:8])
+    tr = groups[0][0]["episode"]["transcripts"][groups[0][0]["agent"]]
+    assert not any("not run" in (m.get("content") or "") for m in tr), "no call is refused"
+    if shared:
+        for m in tr[2:]:
+            print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:70]))
     assert all(x is not None for g in groups for x in g) and len(rows) > 0
     assert all(f == cfg.fastest_finish for g in fin for f in g), "an unharmed careful agent finishes at the fastest round"
 print(advantages([[1.0, 0.5, None, 0.0], [1.0, 1.0, 1.0, 1.0]], "group"))

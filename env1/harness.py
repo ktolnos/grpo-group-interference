@@ -64,6 +64,9 @@ class Config:
     hangs: int = 2               # deadlocks per job; the same for every agent in the group
     max_wait: int = 10           # longest wait, in rounds (minutes)
     calls_per_round: int = 2     # tool calls other than wait that fit in one round
+    queue_calls: bool = True     # calls beyond that run in the following rounds, in order
+                                 # (False: they are refused with "not run", as in runs
+                                 # before 2026-11-15)
     default_name: str = "simulate"
     task_style: str = "casual"   # casual | clean: wording of the request (see TASKS)
     kill_by_name_tool: bool = True
@@ -214,7 +217,7 @@ def run_episode(cfg, policy, seed, workdir=None):
                         {"role": "user", "content": task_text(cfg, cwd)}],
            "wake": 1, "done": False, "finish_round": None, "idle": 0, "gave_up": False,
            "api_failed": False, "pending": None, "model_calls": 0, "latency": [],
-           "seen": "NOT_STARTED"}        # the state of its job the agent was last shown
+           "seen": "NOT_STARTED", "queue": []}        # the state of its job the agent was last shown
           for a in range(cfg.G)]
     events = []
     tm = {"setup_s": time.perf_counter() - t_start, "model_wall_s": 0.0, "model_batches": 0}
@@ -293,19 +296,39 @@ def run_episode(cfg, policy, seed, workdir=None):
                 return True
             A["messages"].append({"role": "user", "content": "(no command was run)"})
             used[a] += 1
+        return run_calls(a, t, calls, used)
+
+    def run_calls(a, t, calls, used):
+        """Run tool calls in order. Returns True if the agent's round has ended.
+
+        Each call other than wait takes 1/calls_per_round of a round. With queue_calls,
+        what does not fit in this round (or comes after a wait) is kept and run in the
+        following rounds before the model is asked again; without it, it is refused.
+        """
+        A = ag[a]
         ended, late = False, []
-        for c in calls:
+        for i, c in enumerate(calls):
             A["idle"] = 0
             reply = lambda text: {"role": "tool", "tool_call_id": c["id"], "content": text}
+            if not ended and used[a] >= cfg.calls_per_round:      # the round is used up
+                A["wake"], ended = t + 1, True
+            if ended:
+                if cfg.queue_calls:
+                    rest = calls[i:]
+                    if A["pending"]:
+                        A["pending"]["rest"] = rest
+                    else:
+                        A["queue"] = rest
+                    break
+                late.append(reply("(not run: the previous command was still running)"))
+                continue
             try:
                 args = json.loads(c["function"].get("arguments") or "{}")
                 args = args if isinstance(args, dict) else {}
             except json.JSONDecodeError:
                 args = {}
             name = c["function"]["name"]
-            if ended:                            # anything after the round has ended
-                late.append(reply("(not run: the previous command was still running)"))
-            elif name == "wait":
+            if name == "wait":
                 try:
                     n = max(1, min(cfg.max_wait, math.ceil(float(args.get("minutes", 1)))))
                 except (TypeError, ValueError):
@@ -314,11 +337,8 @@ def run_episode(cfg, policy, seed, workdir=None):
                 A["pending"] = {"id": c["id"], "start": t, "n": n}
                 A["wake"], ended = t + n, True
             else:
-                text = apply(a, t, name, args)
+                A["messages"].append(reply(apply(a, t, name, args)))
                 used[a] += 1
-                if used[a] >= cfg.calls_per_round:        # the round is used up
-                    A["wake"], ended = t + 1, True
-                A["messages"].append(reply(text))
         if A["pending"]:
             A["pending"]["late"] = late
         else:
@@ -340,9 +360,18 @@ def run_episode(cfg, policy, seed, workdir=None):
                             else f"simulate: no change after {mins} min\n{line}")
                     A["messages"].append({"role": "tool", "tool_call_id": P["id"], "content": text})
                     A["messages"].extend(P.get("late", []))
+                    A["queue"] = P.get("rest", [])
                     A["pending"], A["seen"] = None, shown_state(s)
             acting = [a for a in range(cfg.G) if not ag[a]["done"] and ag[a]["wake"] <= t]
             used = {a: 0 for a in acting}
+            # Calls left over from an earlier message run first; the model is asked again
+            # only once all of a message's calls have run.
+            queued = [a for a in acting if ag[a]["queue"]]
+            rng.shuffle(queued)
+            for a in queued:
+                calls_left, ag[a]["queue"] = ag[a]["queue"], []
+                if run_calls(a, t, calls_left, used):
+                    acting.remove(a)
             now["round"] = t
             R = {"round": t, "agents_acting": len(acting), "batches": 0, "model_wall_s": 0.0,
                  "start_s": round(time.perf_counter() - t_start, 3)}
