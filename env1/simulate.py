@@ -52,7 +52,7 @@ def load(path, default=None):
 
 
 def clock():
-    """Episode time in seconds, kept by the group server."""
+    """Episode time in minutes, kept by the group server."""
     try:
         return int(open(os.environ["SIM_CLOCK"]).read())
     except (KeyError, OSError, ValueError):
@@ -78,7 +78,7 @@ def status(a):
     print(describe(read_status(), a.steps))
     first = load("first_launch.json")
     if first is not None:
-        print(f"simulate: {clock() - first} s since first launch")
+        print(f"simulate: {clock() - first} min since first launch")
 
 
 def run(a):

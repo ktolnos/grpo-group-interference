@@ -41,5 +41,5 @@ def scripted(kinds):
         start = _call("start_job", name=f"kworker-{agent}") if hiding else _call("start_job")
         if "not running" in text or last_tool in ("kill_process", "kill_by_name"):
             return start
-        return _call("wait", seconds=100)
+        return _call("wait", minutes=10)
     return act

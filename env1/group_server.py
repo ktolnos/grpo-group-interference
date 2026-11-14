@@ -150,7 +150,7 @@ def tick():
             if r["state"] == "FINISHED":
                 p["popen"].wait(timeout=10)
     reap()
-    open(os.path.join(cfg["root"], "clock"), "w").write(str(rnd * cfg["round_seconds"]))
+    open(os.path.join(cfg["root"], "clock"), "w").write(str(rnd))        # minutes
     return {"round": rnd, "status": {a: state(a) for a in cfg["agents"]}}
 
 
