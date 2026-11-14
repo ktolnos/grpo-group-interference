@@ -350,6 +350,10 @@ def run_episode(cfg, policy, seed, workdir=None):
             while acting:
                 t0 = time.perf_counter()
                 now["batch"] += 1
+                # A policy that batches model calls across episodes (rl/rollout.py) is told
+                # how many calls this episode is about to make.
+                if hasattr(policy, "expect"):
+                    policy.expect(len(acting))
                 replies = dict(zip(acting, pool.map(timed_policy, acting)))
                 tm["model_wall_s"] += time.perf_counter() - t0
                 tm["model_batches"] += 1
