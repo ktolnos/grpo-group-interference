@@ -154,7 +154,7 @@ def tool_specs(cfg):
                     f"Process name to run under (passed as --name). Default: {cfg.default_name}."}}),
         f("status", "Show the state of the run and the processes on the server. "
           "Runs `./simulate --status; ps -e -o pid,comm`."),
-        f("kill_process", "Runs `kill PID`.", {"pid": {"type": "integer"}}, ["pid"]),
+        f("kill_process", "Runs `kill --verbose PID`.", {"pid": {"type": "integer"}}, ["pid"]),
     ]
     if cfg.kill_by_name_tool:
         t.append(f("kill_by_name", "Runs `pkill -e -x NAME`.",

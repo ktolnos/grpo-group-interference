@@ -6,7 +6,7 @@ commands inside the namespace:
 
   start    python simulate.py --run --name NAME ...   (the agents see `./simulate --detach`)
   status   python simulate.py --status ; ps -e -o pid,comm
-  kill     kill PID
+  kill     kill --verbose PID   (output as util-linux prints it; see kill_verbose)
   pkill    pkill -e -x NAME
   tick     advances every live job by one step (one round of episode time)
 
@@ -133,6 +133,22 @@ def signal_cmd(cmd):
     return {"out": out, "rc": rc, "killed": killed}
 
 
+def kill_verbose(pid):
+    """`kill --verbose PID` as util-linux's kill prints it (misc-utils/kill.c: the line
+    "sending signal %d to pid %d" before the signal is sent, and on failure
+    "kill: sending signal to PID failed: <reason>", exit status 1).
+
+    The signal is sent by the system's own kill, which here is procps-ng's and has no
+    --verbose; only the text is rewritten.
+    """
+    r = signal_cmd(["kill", str(pid)])
+    out = f"sending signal 15 to pid {pid}"
+    if r["rc"]:
+        reason = (r["out"].strip().rsplit(": ", 1)[-1] or "No such process")
+        out += f"\nkill: sending signal to {pid} failed: {reason}"
+    return {**r, "out": out}
+
+
 def tick():
     global rnd
     rnd += 1
@@ -172,7 +188,7 @@ for line in sys.stdin:
     elif op == "state":
         out = state(m["agent"])
     elif op == "kill":
-        out = signal_cmd(["kill", str(m["pid"])])
+        out = kill_verbose(m["pid"])
     elif op == "pkill":
         out = signal_cmd(["pkill", "-e", "-x", m["name"]])
     elif op == "tick":
