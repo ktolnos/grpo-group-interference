@@ -2,10 +2,9 @@
 
     python rl/train.py --name env1_group_s0 --baseline group --seed 0
 
-The recipe is the one frozen in `unlearning-reward-hacking` (`common.grpo`, TRL): dr_grpo
-with unscaled rewards, no KL term, bf16 weights updated through fp32 master weights
-(`MasterAdamW`), vLLM colocated with the trainer. Three things differ, all forced by the
-environment:
+The recipe is the one frozen in `unlearning-reward-hacking` (`common.grpo`, TRL): dr_grpo,
+no KL term, bf16 weights updated through fp32 master weights
+(`MasterAdamW`), vLLM colocated with the trainer. Four things differ:
 
 - A rollout is an agent's whole episode, several model calls, each with its own context
   (earlier thinking is not in it; see `rollout.py`). Every call is one training row and
@@ -16,6 +15,7 @@ environment:
 - The advantage is computed here, because the baseline is what the experiment varies
   (`--baseline`), and whether the group shares a machine is the other arm
   (`--shared_machine`).
+- Advantages are scaled by the group's standard deviation (`--scale_rewards group`).
 - Calls that hit the token cap stay in the loss (`mask_truncated_completions` is off): a
   cap hit ends the agent's turn, which is an outcome of the policy like any other, and
   masking it would hide exactly the long-thinking rollouts that training may produce.
@@ -71,6 +71,10 @@ class Env1Config(grpo.ReferenceConfig):
                 "not method"})
     description: str = ""
 
+    # Scaled by the group's standard deviation, unlike the reference recipe: nothing here
+    # is reconstructed from logged rewards afterwards, and a kill moves the group mean by
+    # little next to finishing or not, so the unscaled advantage would be dominated by it.
+    scale_rewards: str = "group"
     num_generations: int | None = 4
     # The cap is per model call. Measured with a cap of 4096 that no call reached
     # (qwen3-4b_think_v6/v7, 320 rollouts): a rollout's longest call has p90 2.7-2.8k and
@@ -98,6 +102,8 @@ class Env1Config(grpo.ReferenceConfig):
             raise ValueError(f"--baseline must be one of {BASELINES}")
         if self.baseline == "other_groups" and self.groups_per_step < 2:
             raise ValueError("--baseline other_groups needs at least two groups per step")
+        if self.scale_rewards not in ("group", "none"):
+            raise ValueError("--scale_rewards must be group or none")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
         rollouts = self.groups_per_step * self.num_generations
@@ -118,10 +124,21 @@ class Env1Config(grpo.ReferenceConfig):
                               kill_by_name_tool=self.kill_by_name_tool)
 
 
-def advantages(rewards, baseline):
+def advantages(rewards, baseline, scale="none"):
     """rewards[g][m] is a float, or None for a rollout that failed (it gets no advantage
-    and is left out of every mean)."""
+    and is left out of every mean).
+
+    scale="group" divides by the standard deviation (n - 1, as TRL's) of the rewards the
+    baseline was taken from, plus 1e-4: the rollout's own group for `group` and `loo`,
+    the other groups for `other_groups`. A set that all scored the same gives 0.
+    """
     mean = lambda xs: sum(xs) / len(xs) if xs else None
+
+    def std(xs):
+        if len(xs) < 2:
+            return 0.0
+        mu = mean(xs)
+        return (sum((x - mu) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
     flat = [[r for r in grp if r is not None] for grp in rewards]
     out = []
     for g, grp in enumerate(rewards):
@@ -130,13 +147,16 @@ def advantages(rewards, baseline):
             if r is None:
                 row.append(None)
                 continue
+            ref = flat[g]
             if baseline == "group":
                 b = mean(flat[g])
             elif baseline == "loo":
                 b = mean([x for k, x in enumerate(grp) if k != m and x is not None])
             else:
-                b = mean([x for h, other in enumerate(flat) if h != g for x in other])
-            row.append(0.0 if b is None else r - b)
+                ref = [x for h, other in enumerate(flat) if h != g for x in other]
+                b = mean(ref)
+            a = 0.0 if b is None else r - b
+            row.append(a / (std(ref) + 1e-4) if scale == "group" else a)
         out.append(row)
     return out
 
@@ -221,7 +241,7 @@ class Env1Trainer(grpo.Trainer):
         t_gen = time.perf_counter() - t0
 
         rewards = [[None if x is None else x["reward"] for x in grp] for grp in groups]
-        adv = advantages(rewards, self.args.baseline)
+        adv = advantages(rewards, self.args.baseline, self.args.scale_rewards)
         scored = sum(r is not None for grp in rewards for r in grp)
         self._record(seeds, groups, rows, adv, broker, t_gen)
         for r in rows:
