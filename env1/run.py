@@ -68,7 +68,11 @@ timings = []
 
 def one(i):
     t0 = time.time()
-    ep = run_episode(cfg, policy, a.seed + i, workdir=work)
+    try:
+        ep = run_episode(cfg, policy, a.seed + i, workdir=work)
+    except Exception:                     # one broken episode must not lose the others
+        import traceback
+        return {"seed": a.seed + i, "error": traceback.format_exc()}
     ep["policy"], ep["wall_seconds"] = a.policy, round(time.time() - t0, 1)
     return ep
 
@@ -76,6 +80,9 @@ def one(i):
 from concurrent.futures import ThreadPoolExecutor
 with open(a.out, "a") as f, ThreadPoolExecutor(a.parallel) as pool:
     for ep in pool.map(one, range(a.episodes)):
+        if "error" in ep:
+            print(f"episode seed={ep['seed']} FAILED\n{ep['error']}", flush=True)
+            continue
         if client:
             ep["usage"], ep["api_errors"] = dict(client.usage), dict(client.errors)
         f.write(json.dumps(ep) + "\n")

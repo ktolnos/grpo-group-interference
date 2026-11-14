@@ -367,7 +367,9 @@ def run_episode(cfg, policy, seed, workdir=None):
             R["wall_s"] = round(time.perf_counter() - t_start - R["start_s"], 3)
             for a, A in enumerate(ag):
                 s = st[str(a)]
-                if not A["done"] and s["state"] == "FINISHED":
+                # The job can finish after its agent has stopped acting (given up, or the
+                # API failed), so the finish round is recorded either way.
+                if s["state"] == "FINISHED" and A["finish_round"] is None:
                     A["done"], A["finish_round"] = True, t
                 # A sleeping agent wakes when its job is no longer in the state the agent
                 # was last shown. (Comparing with the state at the moment it went to sleep
