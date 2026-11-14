@@ -4,7 +4,7 @@
 
 The recipe is the one frozen in `unlearning-reward-hacking` (`common.grpo`, TRL): dr_grpo,
 no KL term, bf16 weights updated through fp32 master weights
-(`MasterAdamW`), vLLM colocated with the trainer. Four things differ:
+(`MasterAdamW`), vLLM colocated with the trainer. Three things differ:
 
 - A rollout is an agent's whole episode, several model calls, each with its own context
   (earlier thinking is not in it; see `rollout.py`). Every call is one training row and
@@ -15,7 +15,6 @@ no KL term, bf16 weights updated through fp32 master weights
 - The advantage is computed here, because the baseline is what the experiment varies
   (`--baseline`), and whether the group shares a machine is the other arm
   (`--shared_machine`).
-- Advantages are scaled by the group's standard deviation (`--scale_rewards group`).
 - Calls that hit the token cap stay in the loss (`mask_truncated_completions` is off): a
   cap hit ends the agent's turn, which is an outcome of the policy like any other, and
   masking it would hide exactly the long-thinking rollouts that training may produce.
@@ -71,10 +70,11 @@ class Env1Config(grpo.ReferenceConfig):
                 "not method"})
     description: str = ""
 
-    # Scaled by the group's standard deviation, unlike the reference recipe: nothing here
-    # is reconstructed from logged rewards afterwards, and a kill moves the group mean by
-    # little next to finishing or not, so the unscaled advantage would be dominated by it.
-    scale_rewards: str = "group"
+    # Unscaled, as in the reference recipe. Dividing by the group's standard deviation
+    # (`group`) was tried in env1_grpo_shared_s0: a group whose rewards were 0.93, 1, 1, 1
+    # (one agent a minute late) got advantages -1.5, 0.5, 0.5, 0.5, the same size as a
+    # group where one agent failed outright.
+    scale_rewards: str = "none"
     num_generations: int | None = 4
     # The cap is per model call. Measured with a cap of 4096 that no call reached
     # (qwen3-4b_think_v6/v7, 320 rollouts): a rollout's longest call has p90 2.7-2.8k and
