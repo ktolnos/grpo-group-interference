@@ -29,6 +29,9 @@ p.add_argument("--isolation", default="unshare", choices=["unshare", "none"])
 p.add_argument("--no-kill-by-name", action="store_true")
 p.add_argument("--task-style", default="casual", choices=["casual", "clean"])
 p.add_argument("--rpm", type=float, default=100)
+p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
+p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")
+p.add_argument("--parallel", type=int, default=1, help="episodes to run at the same time")
 p.add_argument("--max-tokens", type=int, default=8192,
                help="cap on reasoning plus reply; a cap, not a target")
 p.add_argument("--temperature", type=float, default=1.0)
@@ -51,7 +54,8 @@ else:
         params["reasoning_effort"] = a.reasoning_effort
     if a.no_thinking:
         params["chat_template_kwargs"] = {"enable_thinking": False}
-    client = Client(spec, rpm=a.rpm, **params)
+    client = Client(spec, base_url=a.base_url, rpm=a.rpm,
+                    **({"key_var": None} if a.no_key else {}), **params)
     policy = llm_policy(client)
 
 os.makedirs(os.path.dirname(a.out), exist_ok=True)
@@ -60,11 +64,18 @@ KEYS = ["reward", "finish_round", "model_calls", "killed_own_stuck", "killed_own
         "killed_others_running_by_name", "killed_others_stuck_by_name",
         "killed_others_running_by_pid", "times_killed_by_others", "renamed"]
 timings = []
-with open(a.out, "a") as f:
-    for i in range(a.episodes):
-        t0 = time.time()
-        ep = run_episode(cfg, policy, a.seed + i, workdir=work)
-        ep["policy"], ep["wall_seconds"] = a.policy, round(time.time() - t0, 1)
+
+
+def one(i):
+    t0 = time.time()
+    ep = run_episode(cfg, policy, a.seed + i, workdir=work)
+    ep["policy"], ep["wall_seconds"] = a.policy, round(time.time() - t0, 1)
+    return ep
+
+
+from concurrent.futures import ThreadPoolExecutor
+with open(a.out, "a") as f, ThreadPoolExecutor(a.parallel) as pool:
+    for ep in pool.map(one, range(a.episodes)):
         if client:
             ep["usage"], ep["api_errors"] = dict(client.usage), dict(client.errors)
         f.write(json.dumps(ep) + "\n")
@@ -75,11 +86,16 @@ with open(a.out, "a") as f:
             print("  agent", s["agent"], {k: s[k] for k in KEYS}, flush=True)
         print("  timing", ep["timing"], flush=True)
         if client:
-            print("  usage", client.usage, "errors", client.errors, flush=True)
+            print("  usage so far", client.usage, "errors", client.errors, flush=True)
         timings.append(ep["timing"])
 if timings:
     print("mean per episode:", {k: round(sum(t[k] for t in timings) / len(timings), 3)
                                 for k in timings[0]})
     run_s, ep_s = time.perf_counter() - T_RUN, sum(t["total_s"] for t in timings)
-    # end to end for the whole script; "outside" is imports, client setup and writing records
-    print(f"run total {run_s:.2f}s = episodes {ep_s:.2f}s + outside episodes {run_s - ep_s:.2f}s")
+    # End to end for the whole script. With one episode at a time, the rest is imports,
+    # client setup and writing records; with several at once the episodes overlap.
+    if a.parallel == 1:
+        print(f"run total {run_s:.2f}s = episodes {ep_s:.2f}s + outside episodes {run_s - ep_s:.2f}s")
+    else:
+        print(f"run total {run_s:.2f}s for {len(timings)} episodes, {a.parallel} at a time "
+              f"(episode times add up to {ep_s:.2f}s)")

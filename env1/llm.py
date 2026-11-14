@@ -45,7 +45,7 @@ class Client:
         self.model = model
         self.url = (base_url or os.environ.get("VECTOR_BASE_URL",
                                                "https://proxy.vectorinstitute.ai/v1")) + "/chat/completions"
-        key = os.environ.get(key_var)
+        key = os.environ.get(key_var) if key_var else "EMPTY"      # a local server needs no key
         if not key:
             raise SystemExit(f"{key_var} is not set")
         self.headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}

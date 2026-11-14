@@ -350,7 +350,7 @@ def run_episode(cfg, policy, seed, workdir=None):
                     secs = (t - P["start"]) * cfg.round_seconds
                     s = grp.call("state", agent=a)
                     line = simulate.describe(s, cfg.steps)
-                    text = (line if P.get("why") is not None
+                    text = (f"{line}\n(returned after {secs} s)" if P.get("why") is not None
                             else f"simulate: no change after {secs} s\n{line}")
                     A["messages"].append({"role": "tool", "tool_call_id": P["id"], "content": text})
                     A["messages"].extend(P.get("late", []))
