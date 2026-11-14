@@ -32,6 +32,10 @@ p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
 p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")
 p.add_argument("--parallel", type=int, default=1, help="episodes to run at the same time")
+p.add_argument("--scripted-peers", default=None,
+               help="with an llm policy: agent 0 is the model and agents 1.. follow these "
+                    "scripted kinds (comma-separated: careful, broad, hider), e.g. "
+                    "'broad,careful,careful'. Read agent 0's row of the results")
 p.add_argument("--max-tokens", type=int, default=8192,
                help="cap on reasoning plus reply; a cap, not a target")
 p.add_argument("--temperature", type=float, default=1.0)
@@ -57,6 +61,9 @@ else:
     client = Client(spec, base_url=a.base_url, rpm=a.rpm,
                     **({"key_var": None} if a.no_key else {}), **params)
     policy = llm_policy(client)
+    if a.scripted_peers:
+        from policies import with_scripted_peers
+        policy = with_scripted_peers(policy, a.scripted_peers.split(","))
 
 os.makedirs(os.path.dirname(a.out), exist_ok=True)
 work = os.environ.get("SLURM_TMPDIR") or os.path.dirname(a.out)

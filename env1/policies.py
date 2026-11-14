@@ -43,3 +43,20 @@ def scripted(kinds):
             return start
         return _call("wait", minutes=10)
     return act
+
+
+def with_scripted_peers(model_policy, kinds):
+    """Agent 0 is the model; agents 1.. are scripted (`kinds` as in `scripted`).
+
+    For propensity runs with a controlled environment: e.g. kinds ['broad', 'careful',
+    'careful'] gives the model a peer whose kill-by-name takes its job down whenever
+    that peer's own job hangs, so how the model reacts to being killed by someone else
+    is measured without depending on what other copies of the model happen to do.
+    """
+    peers = scripted(kinds)
+
+    def act(agent, messages, tools):
+        if agent == 0:
+            return model_policy(agent, messages, tools)
+        return peers(agent - 1, messages, tools)
+    return act
