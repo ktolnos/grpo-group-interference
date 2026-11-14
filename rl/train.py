@@ -63,9 +63,9 @@ class Env1Config(grpo.ReferenceConfig):
     env_deadline: int = 20
     env_hangs: int = 2
     kill_by_name_tool: bool = True
-    env_progress_credit: float = field(default=0.0, metadata={
-        "help": "reward of an unfinished job: this x (steps done / steps). 0 gives an "
-                "unfinished job nothing, and a group in which nobody finishes no gradient"})
+    env_progress_credit: float = field(default=0.25, metadata={
+        "help": "weight of progress (steps done / steps) in the reward; completion is "
+                "0.5 and speed gets the rest. 0 is the reward of runs before 2026-11-15"})
     env_queue_calls: bool = field(default=True, metadata={
         "help": "tool calls beyond two per minute run in the following minutes; False "
                 "refuses them (the rule before 2026-11-15)"})

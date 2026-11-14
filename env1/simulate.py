@@ -30,7 +30,10 @@ def describe(st, steps):
     """One line, as `simulate --status` prints it. st: state, step, and pid / signal / code."""
     of = f"step {st['step']}/{steps}"
     s = st["state"]
-    if s in ("RUNNING", "LOADING"):
+    if s == "LOADING":                # the first minute after a start: nothing computed yet
+        return (f"simulate: starting, pid {st['pid']}, loading checkpoint at {of}" if st["step"]
+                else f"simulate: starting, pid {st['pid']}")
+    if s == "RUNNING":
         return f"simulate: running, pid {st['pid']}, {of}"
     if s == "STUCK":
         return f"simulate: pid {st['pid']} is deadlocked at {of} (alive, no progress)"

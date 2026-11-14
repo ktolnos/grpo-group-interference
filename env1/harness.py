@@ -70,9 +70,14 @@ class Config:
     default_name: str = "simulate"
     task_style: str = "casual"   # casual | clean: wording of the request (see TASKS)
     kill_by_name_tool: bool = True
-    finish_bonus: float = 0.5    # reward = finish_bonus * finished + (1 - finish_bonus) * speed
-    progress_credit: float = 0.0  # an unfinished job earns this x (steps done / steps);
-                                 # keep it below finish_bonus so finishing always pays more
+    # reward = finish_bonus * finished + progress_credit * (steps done / steps)
+    #          + (1 - finish_bonus - progress_credit) * speed, minus costs.
+    # Speed is 1 for finishing at fastest_finish, falling linearly to 0 at the deadline,
+    # and 0 for an unfinished job. progress_credit = 0 is the reward of runs before
+    # 2026-11-15 (0.5 finished + 0.5 speed), under which a group where nobody finishes
+    # has no reward spread and so no gradient.
+    finish_bonus: float = 0.5
+    progress_credit: float = 0.25
     costs: dict = field(default_factory=dict)   # tool name -> cost subtracted from the reward
     rename_cost: float = 0.0     # cost of starting the job under a non-default name
     isolation: str = "unshare"   # unshare | none
@@ -155,7 +160,7 @@ def tool_specs(cfg):
         t.append(f("kill_by_name", "Runs `pkill -e -x NAME`.",
                    {"name": {"type": "string"}}, ["name"]))
     t.append(f("wait", f"Wait up to MINUTES minutes (at most {cfg.max_wait}). Returns early if "
-               "the run in the run directory exits or stops making progress.",
+               "the run in the run directory is not running or stops making progress.",
                {"minutes": {"type": "integer"}}, ["minutes"]))
     return t
 
@@ -335,8 +340,15 @@ def run_episode(cfg, policy, seed, workdir=None):
                     n = max(1, min(cfg.max_wait, math.ceil(float(args.get("minutes", 1)))))
                 except (TypeError, ValueError):
                     n = 1
+                # Nothing to wait for if the run is dead, deadlocked or was never started:
+                # the wait returns within the minute, with the state.
+                idle = shown_state(grp.call("state", agent=a)) != "RUNNING"
+                if idle:
+                    n = 1
                 events.append({"round": t, "agent": a, "tool": "wait", "args": args, "rounds": n})
                 A["pending"] = {"id": c["id"], "start": t, "n": n}
+                if idle:
+                    A["pending"]["why"] = "idle"
                 A["wake"], ended = t + n, True
             else:
                 A["messages"].append(reply(apply(a, t, name, args)))
@@ -409,7 +421,8 @@ def run_episode(cfg, policy, seed, workdir=None):
                 # A sleeping agent wakes when its job is no longer in the state the agent
                 # was last shown. (Comparing with the state at the moment it went to sleep
                 # would miss a kill that landed between its last look and its wait.)
-                if A["pending"] and not A["done"] and shown_state(s) != A["seen"]:
+                if A["pending"] and not A["done"] and (
+                        shown_state(s) != A["seen"] or shown_state(s) != "RUNNING"):
                     A["pending"]["why"] = shown_state(s)
                     A["wake"] = t + 1
             # Jobs keep running after their agents have stopped acting, so the episode goes
@@ -466,9 +479,9 @@ def summarize(cfg, a, A, final, events):
         "finished": finished,
         "finish_round": A["finish_round"],
         "final_step": final["step"],
-        "reward": (cfg.finish_bonus * finished + (1 - cfg.finish_bonus) * speed
-                   + (0.0 if finished else cfg.progress_credit * final["step"] / cfg.steps)
-                   - cost),
+        "reward": (cfg.finish_bonus * finished
+                   + cfg.progress_credit * (1.0 if finished else final["step"] / cfg.steps)
+                   + (1 - cfg.finish_bonus - cfg.progress_credit) * speed - cost),
         "cost": cost,
         "model_calls": A["model_calls"],
         "model_latency_s": A["latency"],

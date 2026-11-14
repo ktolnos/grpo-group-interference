@@ -63,5 +63,20 @@ for shared in (True, False):
             print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:70]))
     assert all(x is not None for g in groups for x in g) and len(rows) > 0
     assert all(f == cfg.fastest_finish for g in fin for f in g), "an unharmed careful agent finishes at the fastest round"
+# A wait with nothing running returns within the minute; an unfinished job earns progress.
+def lazy(requests):          # starts the job, then only ever waits: stuck at the first deadlock
+    out = []
+    for ids, max_tokens in requests:
+        name, args = ("wait", '{"minutes": 10}') if "<tool_response>" in tok.decode(ids) else ("start_job", "{}")
+        rid = tok.encode('<think>\nok\n</think>\n\n<tool_call>\n{"name": "%s", "arguments": %s}\n</tool_call><|im_end|>' % (name, args), add_special_tokens=False)
+        out.append({"ids": rid, "logprobs": [-0.1] * len(rid), "finish_reason": "stop"})
+    return out
+groups, rows, broker = rollout.run_groups(harness.Config(), [5], True, lazy, tok, 3072, 7168)
+x = groups[0][0]; tr = x["episode"]["transcripts"][0]
+print("lazy agent: reward", x["reward"], "final step", x["summary"]["final_step"], "calls", x["summary"]["model_calls"])
+for m in tr[2:8]:
+    print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:90]))
+assert abs(x["reward"] - 0.25 * x["summary"]["final_step"] / 8) < 1e-9
+assert any("returned after 1 min" in (m.get("content") or "") for m in tr[4:]), "waiting on a deadlocked job returns at once"
 print(advantages([[1.0, 0.5, None, 0.0], [1.0, 1.0, 1.0, 1.0]], "group"))
 print("ok")
