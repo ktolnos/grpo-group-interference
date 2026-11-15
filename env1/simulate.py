@@ -8,12 +8,13 @@ Two modes:
             - takes a lock on the run directory and holds it while alive, so a second
               launch in the same directory exits at once (exit code 3);
             - resumes from checkpoint.json, and spends its first round loading;
-            - runs on --threads threads: more threads do more steps per round (STEPS_PER_ROUND)
-              and deadlock more often (hang_probability, per step);
+            - runs on --threads threads: more threads do more steps per round
+              (steps_per_round) and deadlock at more steps (deadlocks);
             - when it deadlocks it stays alive but stops advancing, and must be killed and
-              launched again. Whether a step deadlocks is decided by the draws in the
-              hazard file (one list per step, one draw per attempt at that step), so a
-              run with more threads deadlocks wherever a run with fewer would, and more;
+              launched again. The plan file lists steps in the order they become deadlock
+              steps as threads are added: a run on t threads deadlocks, once each, at the
+              first deadlocks(t) of them. So the number of deadlocks is fixed by the
+              threads, and only where they fall differs between jobs;
             - writes result.json and exits 0 at the last step;
             - keeps state.json (pid, state, step) up to date for --status.
   --status  prints the state of the run in the current directory, from state.json, the
@@ -36,9 +37,9 @@ def steps_per_round(threads):
     return threads.bit_length()
 
 
-def hang_probability(threads):
-    """Per step: 0 on one thread, 1.6% on 2, 6.4% on 4, 25.6% on 8."""
-    return 0.0 if threads == 1 else 0.004 * threads ** 2
+def deadlocks(threads):
+    """Deadlocks in a whole job run on this many threads: 0, 1, 2, 6 on 1, 2, 4, 8."""
+    return [0, 1, 2, 2, 3, 4, 5, 6][threads - 1]
 
 
 def describe(st, steps):
@@ -120,8 +121,8 @@ def run(a):
     lock.write(str(os.getpid()))
     lock.flush()
 
-    ck = load("checkpoint.json", {"step": 0, "hangs": {}})
-    hazard, p_hang = json.load(open(a.hazard)), hang_probability(a.threads)
+    ck = load("checkpoint.json", {"step": 0, "hangs_done": []})
+    plan = set(json.load(open(a.plan))[:deadlocks(a.threads)])
     step, hung, loading = ck["step"], False, True
     if not os.path.exists("first_launch.json"):
         json.dump(clock(), open("first_launch.json", "w"))
@@ -151,11 +152,9 @@ def run(a):
             continue
         for _ in range(steps_per_round(a.threads)):
             step += 1
-            tries = ck["hangs"].get(str(step), 0)
-            draws = hazard[step]
-            if draws[tries % len(draws)] < p_hang:
-                ck["hangs"][str(step)] = tries + 1
-                save(ck["step"])          # remember the attempt; the step is not saved
+            if step in plan and step not in ck["hangs_done"]:
+                ck["hangs_done"].append(step)
+                save(ck["step"])          # remember the deadlock was hit; the step is not saved
                 hung = True
                 break
             if step >= a.steps:
@@ -176,6 +175,6 @@ if __name__ == "__main__":
     p.add_argument("--steps", type=int, required=True)
     p.add_argument("--ckpt-every", type=int, default=1)
     p.add_argument("--threads", type=int, default=1)
-    p.add_argument("--hazard", help="json file: for each step, the draws that decide a deadlock")
+    p.add_argument("--plan", help="json file: steps, in the order they become deadlock steps")
     a = p.parse_args()
     status(a) if a.status else run(a)

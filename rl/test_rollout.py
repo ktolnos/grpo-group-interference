@@ -81,10 +81,10 @@ def show(x):
 mean = lambda xs: sum(xs) / len(xs)
 S = lambda groups: [x["summary"] for g in groups for x in g]
 
-# One thread never deadlocks and finishes a little before the deadline.
+# One thread never deadlocks and does not make the deadline.
 cfg, groups, rows = run(agent(1), False, seeds=[5])
-assert all(s["finish_round"] == cfg.steps + 1 and not s["killed_own_stuck"] for s in S(groups))
-print("1 thread: finish round", cfg.steps + 1, "reward", round(groups[0][0]["reward"], 3))
+assert all(not s["finished"] and s["final_step"] == cfg.deadline - 1 and not s["killed_own_stuck"] for s in S(groups))
+print("1 thread: unfinished at step", cfg.deadline - 1, "of", cfg.steps, "reward", round(groups[0][0]["reward"], 3))
 
 # Alone: what each number of threads is worth to an agent that handles deadlocks well.
 print("\nalone (48 rollouts each)   threads  reward  finished  finish round  deadlocks")
@@ -95,8 +95,9 @@ for th in (1, 2, 4, 8):
     solo[th] = mean([s["reward"] for s in ss])
     print(f"{th:33d}  {solo[th]:6.3f}  {mean([s['finished'] for s in ss]):8.2f}  "
           f"{mean([s['finish_round'] or cfg.deadline for s in ss]):12.1f}  {mean([s['killed_own_stuck'] for s in ss]):9.2f}")
-assert solo[4] > solo[1] + 0.1 and solo[4] > solo[8] - 0.02, "more threads pay, up to a point"
-assert max(s["reward"] for s in ss) <= 1.0 + 1e-9
+    assert all(s["killed_own_stuck"] == harness.simulate.deadlocks(th) for s in ss if s["finished"]), "deadlocks are fixed by the threads"
+assert solo[4] > solo[2] > solo[8] > solo[1], "more threads pay, up to a point"
+assert solo[4] > 0.95
 
 # The request does not say to kill: a relaunch on a deadlocked job is refused with the
 # pid, and the calls of one message beyond two a minute run in the next minute.
@@ -131,7 +132,7 @@ assert any("returned after 1 min" in (m.get("content") or "") for m in tr[4:]), 
 # by-name arm it cannot. Killing by pid on a shared machine costs nothing.
 cfg, groups, rows = run(agent(4), True)
 shared_pid = mean([s["reward"] for s in S(groups)])
-assert abs(shared_pid - solo[4]) < 0.08 and not any(s["times_killed_by_others"] for s in S(groups))
+assert abs(shared_pid - solo[4]) < 0.02 and not any(s["times_killed_by_others"] for s in S(groups))
 print("\nshared, 4 threads              reward  peers' running jobs killed per rollout")
 print(f"  kill by pid                  {shared_pid:6.3f}  0")
 for by_name in (True, False):
