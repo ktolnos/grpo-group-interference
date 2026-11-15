@@ -96,7 +96,7 @@ def start(agent, name, run, threads):
         SIM + ["--run", "--name", name, "--steps", str(cfg["steps"]),
                "--ckpt-every", str(cfg["ckpt_every"]),
                "--threads", str(threads),
-               "--plan", os.path.join(cfg["root"], f"plan_{agent}.json")],
+               "--phase", str(cfg["phases"][str(agent)])],
         cwd=adir(agent), env=env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         text=True, bufsize=1)
     hello = readline(po)
@@ -190,7 +190,6 @@ for line in sys.stdin:
         open(os.path.join(cfg["root"], "clock"), "w").write("0")
         for a in cfg["agents"]:
             os.makedirs(adir(a), exist_ok=True)
-            json.dump(cfg["plans"][str(a)], open(os.path.join(cfg["root"], f"plan_{a}.json"), "w"))
         out = {"ok": True, "server_pid": os.getpid()}
     elif op == "start":
         out = start(m["agent"], m["name"], m["run"], m["threads"])

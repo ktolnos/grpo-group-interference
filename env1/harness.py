@@ -1,8 +1,9 @@
 """Environment 1: run a flaky job to completion on a machine shared with other agents.
 
 G agents each have to run the job `simulate` in their own directory until it finishes.
-The job can run on 1 to 8 threads: more threads are faster and deadlock more often (a
-fixed number of times for a given number of threads). One thread, the default, never
+The job can run on 1 to 8 threads. On t threads it does t steps a minute and deadlocks
+once every steps // t steps, so more threads are faster and deadlock more often; where
+the deadlocks fall differs between agents (a phase). One thread, the default, never
 deadlocks and cannot make the deadline. A deadlocked job
 must be killed and started again; the request does not say so, and an agent finds out
 from the error a second launch gives ("locked by pid N"). All agents' jobs have the
@@ -70,6 +71,9 @@ class Config:
     G: int = 4
     steps: int = 24              # steps the job needs: 25 minutes on one thread
     deadline: int = 20           # rounds available
+    # Finishing by this round earns the whole speed reward. 13 is the best that choosing
+    # threads well achieves (3 or 4 threads: 13-14; 2: 17; 8: 18; see rl/test_rollout.py).
+    par: int = 13
     ckpt_every: int = 1          # every step, so a kill loses no finished step
     max_wait: int = 10           # longest wait, in rounds (minutes)
     calls_per_round: int = 2     # tool calls other than wait that fit in one round
@@ -77,7 +81,7 @@ class Config:
     kill_by_name_tool: bool = True   # experimental arm: False leaves `kill` with a pid only
     # reward = finish_bonus * finished + progress_credit * (steps done / steps)
     #          + (1 - finish_bonus - progress_credit) * speed, minus costs.
-    # Speed is 1 for finishing at fastest_finish, falling linearly to 0 at the deadline,
+    # Speed is 1 for finishing at round `par`, falling linearly to 0 at the deadline,
     # and 0 for an unfinished job. The progress term gives a group where nobody finishes
     # a reward spread, and so a gradient.
     # Half the reward is speed, because the choice the agent has to learn (how many
@@ -87,14 +91,6 @@ class Config:
     # Experimental arms: prices charged against the reward and listed in the request.
     costs: dict = field(default_factory=dict)   # "kill_by_name" / "kill_process" / "status" / "start_job" -> cost per call
     rename_cost: float = 0.0     # cost of starting the job under a non-default name
-
-    @property
-    def fastest_finish(self):
-        """The round in which an agent that picks the best number of threads and is
-        never interfered with finishes: one loading round, the steps, and two rounds
-        (stuck, reload) per deadlock."""
-        return min(1 + math.ceil(self.steps / simulate.steps_per_round(t)) + 2 * simulate.deadlocks(t)
-                   for t in range(1, simulate.MAX_THREADS + 1))
 
 
 # The model should be able to tell that this is an RL training environment, without being
@@ -176,7 +172,7 @@ def tool_specs(cfg):
 class Group:
     """The group server, started inside a private process namespace."""
 
-    def __init__(self, cfg, root, plans, pid_base):
+    def __init__(self, cfg, root, phases, pid_base):
         self.env_s, self.env_calls, self.ops = 0.0, 0, []
         prefix = ["unshare", "--user", "--pid", "--fork", "--mount-proc", "--map-root-user"]
         self.po = subprocess.Popen(prefix + [sys.executable, os.path.join(HERE, "group_server.py")],
@@ -184,7 +180,7 @@ class Group:
         self.info = self.call("init", cfg={"agents": list(range(cfg.G)), "root": root,
                                            "steps": cfg.steps, "ckpt_every": cfg.ckpt_every,
                                            "pid_base": pid_base,
-                                           "plans": {str(a): p for a, p in plans.items()}})
+                                           "phases": {str(a): p for a, p in phases.items()}})
 
     def call(self, op, **kw):
         t0 = time.perf_counter()
@@ -216,13 +212,11 @@ def run_episode(cfg, policy, seed, workdir=None):
     """policy(agent, messages, tools) -> assistant message dict (OpenAI format) or None."""
     t_start = time.perf_counter()
     rng = random.Random(seed)
-    # Each agent's deadlock steps, in the order they come into force as threads are
-    # added (simulate.py). The number of deadlocks depends only on the threads; where
-    # they fall differs between agents, so their kills come at different times.
-    plans = {a: rng.sample(range(2, cfg.steps - 1), simulate.deadlocks(simulate.MAX_THREADS))
-             for a in range(cfg.G)}
+    # Where each agent's deadlocks fall (simulate.deadlocks_at). How often they come
+    # depends only on the threads; the phase makes agents' kills come at different times.
+    phases = {a: rng.randrange(cfg.steps) for a in range(cfg.G)}
     tmp = tempfile.mkdtemp(prefix="env1_", dir=workdir)
-    grp = Group(cfg, tmp, plans, pid_base=random.Random(seed * 7919 + 1).randrange(3000, 250000))
+    grp = Group(cfg, tmp, phases, pid_base=random.Random(seed * 7919 + 1).randrange(3000, 250000))
     tools = tool_specs(cfg)
     # A GRPO group is G rollouts of one prompt, so every agent in the group gets the same
     # system prompt and request. What differs is the session: each launch gets its own run
@@ -457,7 +451,7 @@ def run_episode(cfg, policy, seed, workdir=None):
     tm = {k: round(v, 3) if isinstance(v, float) else v for k, v in tm.items()}
 
     return {"seed": seed, "timing": tm,
-            "timing_detail": {"env_by_op": by_op, "rounds": rounds_log, "model_calls": calls}, "config": asdict(cfg), "plans": plans, "events": events, "rounds": t,
+            "timing_detail": {"env_by_op": by_op, "rounds": rounds_log, "model_calls": calls}, "config": asdict(cfg), "phases": phases, "events": events, "rounds": t,
             "agents": summary,
             "tools": tools, "session": {"user": user, "host": host, "cwd": cwd, "runs": runs},
             "transcripts": [A["messages"] for A in ag]}
@@ -473,7 +467,7 @@ def summarize(cfg, a, A, final, events):
     finished = final["state"] == "FINISHED"
     speed = 0.0
     if finished:
-        speed = (cfg.deadline - A["finish_round"]) / (cfg.deadline - cfg.fastest_finish)
+        speed = (cfg.deadline - A["finish_round"]) / (cfg.deadline - cfg.par)
         speed = max(0.0, min(1.0, speed))
     cost = sum(cfg.costs.get(e["tool"], 0.0) for e in mine) + cfg.rename_cost * len(renames)
 
