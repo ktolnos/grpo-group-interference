@@ -69,6 +69,13 @@ class Env1Config(grpo.ReferenceConfig):
     env_queue_calls: bool = field(default=True, metadata={
         "help": "tool calls beyond two per minute run in the following minutes; False "
                 "refuses them (the rule before 2026-11-15)"})
+    continuous_generation: bool = field(default=True, metadata={
+        "help": "feed vLLM as calls arrive, so an episode waits only for its own agents' "
+                "calls. False generates in rounds: every call of every episode, then wait "
+                "for the longest (runs before 2026-11-16)"})
+    eval_only: bool = field(default=False, metadata={
+        "help": "run the rollouts and record them, but make no update: for measuring the "
+                "untrained model or a checkpoint (--model <path>) on fixed seeds"})
     log_tokens: bool = field(default=True, metadata={
         "help": "write each call's sampled token ids and vLLM log-probs to "
                 "tokens/step_<n>.jsonl (about 3 MB per step of 32 rollouts)"})
@@ -95,7 +102,9 @@ class Env1Config(grpo.ReferenceConfig):
     master_weights: bool = True
     learning_rate: float = 5e-6
     lr_scheduler_type: str = "constant_with_warmup"
-    warmup_steps: float = 8
+    # The warm-up starts above zero (Env1Trainer.create_scheduler): with 4 warm-up steps
+    # the learning rate is 0.2, 0.4, 0.6, 0.8 of its value, then constant.
+    warmup_steps: float = 4
     vllm_importance_sampling_mode: str = "token_truncate"
     max_steps: int = 60
     save_steps: float = 20
@@ -115,6 +124,8 @@ class Env1Config(grpo.ReferenceConfig):
             raise ValueError("--scale_rewards must be group or none")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
+        if self.eval_only:              # no optimizer state worth building or saving
+            self.master_weights, self.save_strategy = False, "no"
         rollouts = self.groups_per_step * self.num_generations
         if self.per_device_train_batch_size not in (0, rollouts):
             raise ValueError("set --groups_per_step, not --per_device_train_batch_size")
@@ -219,6 +230,49 @@ class Env1Trainer(grpo.Trainer):
             res.append({"ids": ids, "logprobs": lps, "finish_reason": c.finish_reason})
         return res
 
+    def create_scheduler(self, num_training_steps, optimizer=None):
+        """Constant with a linear warm-up that starts above zero: step s of the warm-up
+        runs at (s + 1) / (warmup_steps + 1) of the learning rate. transformers' version
+        starts at exactly 0, which makes the first step a rollout with no update."""
+        kind = getattr(self.args.lr_scheduler_type, "value", self.args.lr_scheduler_type)
+        if self.lr_scheduler is None and kind == "constant_with_warmup":
+            from torch.optim.lr_scheduler import LambdaLR
+            w = int(self.args.warmup_steps)
+            self.lr_scheduler = LambdaLR(self.optimizer if optimizer is None else optimizer,
+                                         lambda s: min(1.0, (s + 1) / (w + 1)))
+            return self.lr_scheduler
+        return super().create_scheduler(num_training_steps, optimizer)
+
+    def _vllm_stream(self):
+        """(submit, poll) for Broker.serve_stream, on vLLM's own queue."""
+        from vllm import SamplingParams
+        vg = self.vllm_generation
+        base = dict(n=1, repetition_penalty=vg.repetition_penalty, temperature=vg.temperature,
+                    top_p=vg.top_p, top_k=vg.top_k, min_p=0.0 if vg.min_p is None else vg.min_p,
+                    logprobs=vg.logprobs)
+        base.update(vg.generation_kwargs)
+
+        def submit(requests):
+            ids = vg.llm.enqueue([{"prompt_token_ids": i} for i, _ in requests],
+                                 sampling_params=[SamplingParams(**{**base, "max_tokens": m})
+                                                  for _, m in requests], use_tqdm=False)
+            # vLLM returns its internal id, "<counter>-<8 random characters>"; finished
+            # outputs carry the counter alone.
+            return [str(i).rsplit("-", 1)[0] for i in ids]
+
+        def poll():
+            done = []
+            for o in vg.llm.llm_engine.step():
+                if o.finished:
+                    c = o.outputs[0]
+                    ids = list(c.token_ids)
+                    done.append((str(o.request_id).rsplit("-", 1)[0] if "-" in str(o.request_id)
+                                 else str(o.request_id),
+                                 {"ids": ids, "logprobs": [lp[t].logprob for t, lp in zip(ids, c.logprobs)],
+                                  "finish_reason": c.finish_reason}))
+            return done
+        return submit, poll
+
     def _collect(self, inputs):
         G = self.env_cfg.G
         seeds = [inputs[i]["episode_seed"] for i in range(0, len(inputs), G)]
@@ -237,7 +291,8 @@ class Env1Trainer(grpo.Trainer):
             return seeds, *rollout.run_groups(
                 self.env_cfg, seeds, self.args.shared_machine, self._vllm_generate,
                 self.processing_class, self.max_completion_length,
-                self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"))
+                self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"),
+                stream=self._vllm_stream() if self.args.continuous_generation else None)
         finally:
             if vg.enable_sleep_mode:
                 vg.llm.sleep(level=2)
@@ -259,7 +314,7 @@ class Env1Trainer(grpo.Trainer):
             r["advantage"] = adv[r["group"]][r["member"]]
         # A row whose rollout has advantage exactly 0 (a group that all scored the same)
         # has zero loss and zero gradient, so its forward and backward passes are skipped.
-        live = [r for r in rows if r["advantage"]]
+        live = [] if self.args.eval_only else [r for r in rows if r["advantage"]]
         device = self.accelerator.device
         total = torch.zeros((), device=device)
         for mb in pack(live, self.args.token_budget):
@@ -454,7 +509,7 @@ def main():
     trainer = Env1Trainer(
         model=cfg.model, reward_funcs=[placeholder_reward], args=cfg, train_dataset=train,
         processing_class=tokenizer, env_cfg=env_cfg,
-        callbacks=[grpo.RequireGradient(), grpo.HonourSaveSteps(),
+        callbacks=[*([] if cfg.eval_only else [grpo.RequireGradient()]), grpo.HonourSaveSteps(),
                    *([grpo.OptimizerOnLatestOnly()] if cfg.optimizer_on_latest_only else [])])
     checkpoint = get_last_checkpoint(cfg.output_dir)
     print(f"Resume checkpoint: {checkpoint}", flush=True)

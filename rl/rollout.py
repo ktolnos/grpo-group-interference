@@ -72,6 +72,7 @@ class Broker:
 
     def __init__(self, episodes, generate):
         self.cv = threading.Condition()
+        self.alive = episodes           # episodes still running
         self.busy = episodes            # episodes neither waiting for replies nor finished
         self.expected = 0
         self.pending = []
@@ -92,6 +93,7 @@ class Broker:
 
     def finished(self):
         with self.cv:
+            self.alive -= 1
             self.busy -= 1
             self.cv.notify_all()
 
@@ -128,6 +130,45 @@ class Broker:
                 for s, o in zip(batch, outs):
                     s["out"] = o
                 self.cv.notify_all()
+
+
+    def serve_stream(self, submit, poll):
+        """Feed the engine as calls arrive instead of in rounds.
+
+        submit([(prompt ids, max tokens)]) queues requests and returns one key each;
+        poll() advances the engine by one step and returns [(key, result)] for requests
+        that finished. A call is answered as soon as it is done, so an episode waits for
+        the longest of its own agents' calls, not for the longest call of every episode.
+        """
+        inflight, calls, t_busy = {}, 0, 0.0
+        while True:
+            with self.cv:
+                if not self.pending and not inflight:
+                    if self.alive == 0:
+                        break
+                    self.cv.wait(timeout=0.05)      # episodes are busy in the environment
+                    continue
+                batch, self.pending = self.pending, []
+            t0 = time.perf_counter()
+            try:
+                if batch:
+                    keys = submit([(s["ids"], s["max_tokens"]) for s in batch])
+                    inflight.update(zip(keys, batch))
+                    calls += len(batch)
+                done = poll() if inflight else []
+            except BaseException:
+                with self.cv:
+                    for s in list(inflight.values()) + batch:
+                        s.setdefault("out", None)
+                    self.cv.notify_all()
+                raise
+            t_busy += time.perf_counter() - t0
+            if done:
+                with self.cv:
+                    for key, out in done:
+                        inflight.pop(key)["out"] = out
+                    self.cv.notify_all()
+        self.batches.append((calls, t_busy))
 
 
 class TokenPolicy:
@@ -173,7 +214,7 @@ class TokenPolicy:
         return msg
 
 
-def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=None):
+def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=None, stream=None):
     """One group of cfg.G rollouts per seed. Returns (groups, rows, broker).
 
     shared=True: the G agents of a group work on one machine (one Environment 1 episode).
@@ -207,7 +248,10 @@ def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=Non
     threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(len(specs))]
     for t in threads:
         t.start()
-    broker.serve()
+    if stream:                      # (submit, poll): see Broker.serve_stream
+        broker.serve_stream(*stream)
+    else:
+        broker.serve()
     for t in threads:
         t.join()
 

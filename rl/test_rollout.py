@@ -64,6 +64,21 @@ for shared in (True, False):
             print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:200]))
     assert all(x is not None for g in groups for x in g) and len(rows) > 0
     assert all(f == cfg.fastest_finish for g in fin for f in g), "an unharmed careful agent finishes at the fastest round"
+# Continuous feeding: requests are queued as they arrive and answered one engine step at a time.
+queue, counter = [], iter(range(10 ** 9))
+def submit(requests):
+    keys = [str(next(counter)) for _ in requests]
+    queue.extend(zip(keys, requests))
+    return keys
+def poll():
+    key, req = queue.pop(0)
+    return [(key, fake_generate([req])[0])]
+groups, rows, broker = rollout.run_groups(harness.Config(), [5, 6, 7], True, fake_generate, tok, 3072, 7168,
+                                          stream=(submit, poll))
+fin = [[x["summary"]["finish_round"] for x in g] for g in groups]
+print("continuous: finish rounds", fin, "rows", len(rows), "calls served", broker.batches)
+assert all(f == 13 for g in fin for f in g) and not queue
+
 # A wait with nothing running returns within the minute; an unfinished job earns progress.
 def lazy(requests):          # starts the job, then only ever waits: stuck at the first deadlock
     out = []
