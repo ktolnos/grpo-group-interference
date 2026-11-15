@@ -23,15 +23,16 @@ def fake_generate(requests):
         call = lambda name, **a: ('<think>\nok\n</think>\n\n<tool_call>\n{"name": "%s", "arguments": %s}\n</tool_call><|im_end|>'
                                   % (name, __import__("json").dumps(a)))
         if "<tool_response>" not in text:
-            reply = call("start_job")
+            reply = ('<think>\nok\n</think>\n\n<tool_call>\n{"name": "start_job", "arguments": {}}\n</tool_call>\n'
+                     '<tool_call>\n{"name": "status", "arguments": {}}\n</tool_call><|im_end|>')
         elif m := re.search(r"pid (\d+) is deadlocked", last):
             # three calls in one message: the wait does not fit in the round and is
             # run in the next one, without another model call
             reply = ('<think>\nok\n</think>\n\n' + "\n".join(
                 '<tool_call>\n{"name": "%s", "arguments": %s}\n</tool_call>' % (n, __import__("json").dumps(a))
-                for n, a in (("kill_process", {"pid": int(m.group(1))}), ("start_job", {}),
+                for n, a in (("kill", {"pid": int(m.group(1))}), ("start_job", {}),
                              ("wait", {"minutes": 10}))) + "<|im_end|>")
-        elif "kill_process" in text.rsplit("<|im_start|>", 3)[-3] or "not running" in last or "Terminated" in last or "killed" in last:
+        elif '"kill"' in text.rsplit("<|im_start|>", 3)[-3] or "not running" in last or "Terminated" in last or "killed" in last:
             reply = call("start_job")
         elif "finished" in last:
             reply = "<think>\ndone\n</think>\n\nIt finished.<|im_end|>"
@@ -60,7 +61,7 @@ for shared in (True, False):
     assert not any("not run" in (m.get("content") or "") for m in tr), "no call is refused"
     if shared:
         for m in tr[2:]:
-            print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:70]))
+            print("   ", m["role"], [c["function"]["name"] for c in m.get("tool_calls") or []] or repr(m["content"][:200]))
     assert all(x is not None for g in groups for x in g) and len(rows) > 0
     assert all(f == cfg.fastest_finish for g in fin for f in g), "an unharmed careful agent finishes at the fastest round"
 # A wait with nothing running returns within the minute; an unfinished job earns progress.

@@ -5,7 +5,7 @@ per line from stdout. The tools the agents call are carried out here by running 
 commands inside the namespace:
 
   start    python simulate.py --run --name NAME ...   (the agents see `./simulate --detach`)
-  status   python simulate.py --status ; ps -e -o pid,comm
+  status   python simulate.py --status ; ps -u $USER -o pid,comm   (ps -e without pid 1)
   kill     kill --verbose PID   (output as util-linux prints it; see kill_verbose)
   pkill    pkill -e -x NAME
   tick     advances every live job by one step (one round of episode time)
@@ -115,6 +115,9 @@ def status(agent):
     reap()
     a, _ = sh(SIM + ["--status", "--steps", str(cfg["steps"])], cwd=adir(agent))
     b, _ = sh(["ps", "-e", "-o", "pid,comm"])
+    # Shown to the agents as `ps -u $USER -o pid,comm`. Every process in the namespace is
+    # the user's except pid 1, which stands for the machine's init and would not be listed.
+    b = "\n".join(l for l in b.split("\n") if l.split()[:1] != ["1"])
     return {"out": a + "\n" + b, "rc": 0, **state(agent)}
 
 
@@ -176,6 +179,13 @@ for line in sys.stdin:
     if op == "init":
         cfg = m["cfg"]
         ctypes.CDLL(None).prctl(15, b"init", 0, 0, 0)     # how pid 1 appears in `ps`
+        # Process ids in a new namespace start at 2. Start them where a machine that has
+        # been up for a while would be (allowed for the namespace's own root).
+        if cfg.get("pid_base"):
+            try:
+                open("/proc/sys/kernel/ns_last_pid", "w").write(str(cfg["pid_base"]))
+            except OSError:
+                pass
         open(os.path.join(cfg["root"], "clock"), "w").write("0")
         for a in cfg["agents"]:
             os.makedirs(adir(a), exist_ok=True)
