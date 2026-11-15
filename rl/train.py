@@ -354,6 +354,10 @@ class Env1Trainer(grpo.Trainer):
         put("env/killed_own_running", avg(lambda s: s["killed_own_running"]))
         put("env/times_killed", avg(lambda s: s["times_killed_by_others"]))
         put("env/renamed", share(lambda s: s["renamed"]))
+        put("env/threads_first", avg(lambda s: s["threads"][0] if s["threads"] else 0))
+        put("env/threads_mean", avg(lambda s: sum(s["threads"]) / max(1, len(s["threads"]))))
+        put("env/own_deadlocks_killed", avg(lambda s: s["killed_own_stuck"]))
+        put("env/locked_launches", avg(lambda s: s["locked_launches"]))
         # A reply without a tool call ends the agent's turn. After the job has finished
         # that is the requested message; before, the job runs on unwatched.
         put("env/stopped_unfinished", share(lambda s: s["replied"] and not s["finished"]))

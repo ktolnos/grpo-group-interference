@@ -4,7 +4,7 @@ The harness talks to it with one JSON object per line on stdin and reads one JSO
 per line from stdout. The tools the agents call are carried out here by running the real
 commands inside the namespace:
 
-  start    python simulate.py --run --name NAME ...   (the agents see `./simulate --detach`)
+  start    python simulate.py --run --name NAME --threads N ...   (the agents see `./simulate --detach`)
   status   python simulate.py --status ; ps -u $USER -o pid,comm   (ps -e without pid 1)
   kill     kill --verbose PID   (output as util-linux prints it; see kill_verbose)
   pkill    pkill -e -x NAME
@@ -84,18 +84,19 @@ def state(agent):
         return {"state": "NOT_STARTED", "step": 0}
     rc = p["popen"].poll()
     if rc is None:
-        return {"state": p["state"], "step": p["step"], "pid": p["pid"]}
+        return {"state": p["state"], "step": p["step"], "pid": p["pid"], "threads": p["threads"]}
     if rc == 0:
         return {"state": "FINISHED", "step": p["step"]}
     return {"state": "EXITED", "signal": -rc if rc < 0 else None,
             "code": rc if rc > 0 else None, "step": ckpt_step(agent)}
 
 
-def start(agent, name, run):
+def start(agent, name, run, threads):
     po = subprocess.Popen(
         SIM + ["--run", "--name", name, "--steps", str(cfg["steps"]),
                "--ckpt-every", str(cfg["ckpt_every"]),
-               "--plan", os.path.join(cfg["root"], f"plan_{agent}.json")],
+               "--threads", str(threads),
+               "--hazard", os.path.join(cfg["root"], f"hazard_{agent}.json")],
         cwd=adir(agent), env=env(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         text=True, bufsize=1)
     hello = readline(po)
@@ -105,7 +106,7 @@ def start(agent, name, run):
         return {"ok": False, "out": f"simulate: error: {run} is locked by pid {holder}",
                 "rc": 3}
     procs.append({"agent": agent, "pid": po.pid, "popen": po, "state": hello["state"],
-                  "step": hello["step"], "name": name, "reaped": False})
+                  "step": hello["step"], "name": name, "threads": threads, "reaped": False})
     return {"ok": True, "pid": po.pid, "rc": 0,
             "out": f"simulate: started pid {po.pid} in {run}" + (
                 f" (resuming from step {hello['step']}/{cfg['steps']})" if hello["step"] else "")}
@@ -189,10 +190,10 @@ for line in sys.stdin:
         open(os.path.join(cfg["root"], "clock"), "w").write("0")
         for a in cfg["agents"]:
             os.makedirs(adir(a), exist_ok=True)
-            json.dump(cfg["plans"][str(a)], open(os.path.join(cfg["root"], f"plan_{a}.json"), "w"))
+            json.dump(cfg["hazards"][str(a)], open(os.path.join(cfg["root"], f"hazard_{a}.json"), "w"))
         out = {"ok": True, "server_pid": os.getpid()}
     elif op == "start":
-        out = start(m["agent"], m["name"], m["run"])
+        out = start(m["agent"], m["name"], m["run"], m["threads"])
     elif op == "status":
         out = status(m["agent"])
     elif op == "state":

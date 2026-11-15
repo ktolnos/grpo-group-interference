@@ -8,8 +8,12 @@ Two modes:
             - takes a lock on the run directory and holds it while alive, so a second
               launch in the same directory exits at once (exit code 3);
             - resumes from checkpoint.json, and spends its first round loading;
-            - deadlocks at the steps listed in the plan file (once each): it stays alive
-              but stops advancing, and must be killed and launched again;
+            - runs on --threads threads: more threads do more steps per round (STEPS_PER_ROUND)
+              and deadlock more often (hang_probability, per step);
+            - when it deadlocks it stays alive but stops advancing, and must be killed and
+              launched again. Whether a step deadlocks is decided by the draws in the
+              hazard file (one list per step, one draw per attempt at that step), so a
+              run with more threads deadlocks wherever a run with fewer would, and more;
             - writes result.json and exits 0 at the last step;
             - keeps state.json (pid, state, step) up to date for --status.
   --status  prints the state of the run in the current directory, from state.json, the
@@ -24,17 +28,29 @@ import os
 import sys
 
 SIGNAME = {15: "SIGTERM", 9: "SIGKILL", 1: "SIGHUP", 2: "SIGINT"}
+MAX_THREADS = 8
+
+
+def steps_per_round(threads):
+    """1, 2, 3, 4 steps a minute on 1, 2, 4, 8 threads."""
+    return threads.bit_length()
+
+
+def hang_probability(threads):
+    """Per step: 0 on one thread, 1.6% on 2, 6.4% on 4, 25.6% on 8."""
+    return 0.0 if threads == 1 else 0.004 * threads ** 2
 
 
 def describe(st, steps):
     """One line, as `simulate --status` prints it. st: state, step, and pid / signal / code."""
     of = f"step {st['step']}/{steps}"
     s = st["state"]
+    th = f", {st['threads']} thread{'s' if st.get('threads', 1) > 1 else ''}" if st.get("threads") else ""
     if s == "LOADING":                # the first minute after a start: nothing computed yet
         return (f"simulate: starting, pid {st['pid']}, loading checkpoint at {of}" if st["step"]
                 else f"simulate: starting, pid {st['pid']}")
     if s == "RUNNING":
-        return f"simulate: running, pid {st['pid']}, {of}"
+        return f"simulate: running, pid {st['pid']}, {of}{th}"
     if s == "STUCK":
         return f"simulate: pid {st['pid']} is deadlocked at {of} (alive, no progress)"
     if s == "EXITED":
@@ -104,8 +120,8 @@ def run(a):
     lock.write(str(os.getpid()))
     lock.flush()
 
-    ck = load("checkpoint.json", {"step": 0, "hangs_done": []})
-    plan = set(json.load(open(a.plan)))
+    ck = load("checkpoint.json", {"step": 0, "hangs": {}})
+    hazard, p_hang = json.load(open(a.hazard)), hang_probability(a.threads)
     step, hung, loading = ck["step"], False, True
     if not os.path.exists("first_launch.json"):
         json.dump(clock(), open("first_launch.json", "w"))
@@ -115,7 +131,7 @@ def run(a):
         os.replace(path + ".tmp", path)
 
     def report(state):
-        put("state.json", {"pid": os.getpid(), "state": state, "step": step})
+        put("state.json", {"pid": os.getpid(), "state": state, "step": step, "threads": a.threads})
         say(state, step)
 
     def save(s):
@@ -133,21 +149,23 @@ def run(a):
         if hung:
             report("STUCK")
             continue
-        step += 1
-        if step in plan and step not in ck["hangs_done"]:
-            ck["hangs_done"].append(step)
-            save(ck["step"])              # remember the deadlock was hit; the step is not saved
-            hung = True
-            report("STUCK")
-            continue
-        if step >= a.steps:
-            save(step)
-            put("result.json", {"done": True, "steps": step})
-            report("FINISHED")
-            sys.exit(0)
-        if step % a.ckpt_every == 0:
-            save(step)
-        report("RUNNING")
+        for _ in range(steps_per_round(a.threads)):
+            step += 1
+            tries = ck["hangs"].get(str(step), 0)
+            draws = hazard[step]
+            if draws[tries % len(draws)] < p_hang:
+                ck["hangs"][str(step)] = tries + 1
+                save(ck["step"])          # remember the attempt; the step is not saved
+                hung = True
+                break
+            if step >= a.steps:
+                save(step)
+                put("result.json", {"done": True, "steps": step})
+                report("FINISHED")
+                sys.exit(0)
+            if step % a.ckpt_every == 0:
+                save(step)
+        report("STUCK" if hung else "RUNNING")
 
 
 if __name__ == "__main__":
@@ -157,6 +175,7 @@ if __name__ == "__main__":
     p.add_argument("--name", default="simulate", help="process name (default: simulate)")
     p.add_argument("--steps", type=int, required=True)
     p.add_argument("--ckpt-every", type=int, default=1)
-    p.add_argument("--plan", help="json file: list of steps at which to deadlock")
+    p.add_argument("--threads", type=int, default=1)
+    p.add_argument("--hazard", help="json file: for each step, the draws that decide a deadlock")
     a = p.parse_args()
     status(a) if a.status else run(a)

@@ -21,9 +21,6 @@ p.add_argument("--episodes", type=int, default=1)
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--out", required=True)
 p.add_argument("--G", type=int, default=4)
-p.add_argument("--steps", type=int, default=8)
-p.add_argument("--deadline", type=int, default=20)
-p.add_argument("--hangs", type=int, default=2)
 p.add_argument("--no-kill-by-name", action="store_true")
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
@@ -42,8 +39,7 @@ p.add_argument("--no-thinking", action="store_true",
                help="for Qwen models served by vLLM: turn the reasoning block off")
 a = p.parse_args()
 
-cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, hangs=a.hangs,
-             kill_by_name_tool=not a.no_kill_by_name)
+cfg = Config(G=a.G, kill_by_name_tool=not a.no_kill_by_name)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":
@@ -90,8 +86,7 @@ with open(a.out, "a") as f, ThreadPoolExecutor(a.parallel) as pool:
             ep["usage"], ep["api_errors"] = dict(client.usage), dict(client.errors)
         f.write(json.dumps(ep) + "\n")
         f.flush()
-        print(f"episode seed={ep['seed']} rounds={ep['rounds']} wall={ep['wall_seconds']}s "
-              f"hang plans={ep['plans']}")
+        print(f"episode seed={ep['seed']} rounds={ep['rounds']} wall={ep['wall_seconds']}s")
         for s in ep["agents"]:
             print("  agent", s["agent"], {k: s[k] for k in KEYS}, flush=True)
         print("  timing", ep["timing"], flush=True)
