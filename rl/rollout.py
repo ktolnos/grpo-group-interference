@@ -9,10 +9,11 @@ So a rollout is not one token sequence, and the unit of the loss is the call: a 
 (prompt ids, completion ids, vLLM log-probs), and every row of a rollout carries that
 rollout's advantage.
 
-Episodes run in threads and block inside `Broker.submit`; the main thread generates once
-every live episode is waiting, so one `generate` call serves all of them.
+Episodes run in threads and block inside `Broker.submit`; the main thread feeds the
+engine's queue as calls arrive and hands each reply back as soon as it is done.
 """
 
+import dataclasses
 import json
 import os
 import re
@@ -64,111 +65,64 @@ def parse_reply(text):
 
 
 class Broker:
-    """Collects the model calls of all running episodes and serves them in batches.
+    """Hands the model calls of all running episodes to the engine as they arrive.
 
-    An episode announces how many calls it is about to make (`expect`), its agent threads
-    block in `submit`, and `serve` generates as soon as no episode is doing anything else.
+    Agent threads block in `submit`; `serve` queues their requests and answers each as
+    soon as it is done, so an episode waits for the longest of its own agents' calls,
+    not for the longest call of every episode.
     """
 
-    def __init__(self, episodes, generate):
+    def __init__(self, episodes):
         self.cv = threading.Condition()
         self.alive = episodes           # episodes still running
-        self.busy = episodes            # episodes neither waiting for replies nor finished
-        self.expected = 0
         self.pending = []
-        self.generate = generate        # list of (prompt ids, max tokens) -> list of results
         self.lock = threading.Lock()    # a fast tokenizer must not be used by two threads at once
-        self.batches = []               # (calls, seconds) per generation call
-
-    def expect(self, n):
-        with self.cv:
-            self.busy -= 1
-            self.expected += n
-            self.cv.notify_all()
-
-    def cancel(self):                   # a call that was announced but will not be made
-        with self.cv:
-            self.expected -= 1
-            self.cv.notify_all()
+        self.calls, self.busy_s = 0, 0.0
 
     def finished(self):
         with self.cv:
             self.alive -= 1
-            self.busy -= 1
             self.cv.notify_all()
 
-    def submit(self, episode, ids, max_tokens):
-        slot = {"episode": episode, "ids": ids, "max_tokens": max_tokens}
+    def submit(self, ids, max_tokens):
+        slot = {"ids": ids, "max_tokens": max_tokens}
         with self.cv:
             self.pending.append(slot)
             self.cv.notify_all()
             self.cv.wait_for(lambda: "out" in slot)
         return slot["out"]
 
-    def serve(self):
-        while True:
-            with self.cv:
-                self.cv.wait_for(lambda: self.busy == 0 and len(self.pending) == self.expected)
-                if not self.pending:
-                    return
-                batch, self.pending, self.expected = self.pending, [], 0
-                # Counted as busy before the replies are handed out, so the next check
-                # cannot run between an episode receiving them and announcing its next batch.
-                self.busy += len({s["episode"] for s in batch})
-            t0 = time.perf_counter()
-            try:
-                outs = self.generate([(s["ids"], s["max_tokens"]) for s in batch])
-            except BaseException:
-                outs = [None] * len(batch)
-                with self.cv:
-                    for s, o in zip(batch, outs):
-                        s["out"] = o
-                    self.cv.notify_all()
-                raise
-            self.batches.append((len(batch), time.perf_counter() - t0))
-            with self.cv:
-                for s, o in zip(batch, outs):
-                    s["out"] = o
-                self.cv.notify_all()
-
-
-    def serve_stream(self, submit, poll):
-        """Feed the engine as calls arrive instead of in rounds.
-
-        submit([(prompt ids, max tokens)]) queues requests and returns one key each;
-        poll() advances the engine by one step and returns [(key, result)] for requests
-        that finished. A call is answered as soon as it is done, so an episode waits for
-        the longest of its own agents' calls, not for the longest call of every episode.
-        """
-        inflight, calls, t_busy = {}, 0, 0.0
+    def serve(self, enqueue, poll):
+        """enqueue([(prompt ids, max tokens)]) queues requests and returns one key each;
+        poll() advances the engine by one step and returns [(key, result)] for the
+        requests that finished, a result being {ids, logprobs, finish_reason}."""
+        inflight = {}
         while True:
             with self.cv:
                 if not self.pending and not inflight:
                     if self.alive == 0:
-                        break
+                        return
                     self.cv.wait(timeout=0.05)      # episodes are busy in the environment
                     continue
                 batch, self.pending = self.pending, []
             t0 = time.perf_counter()
             try:
                 if batch:
-                    keys = submit([(s["ids"], s["max_tokens"]) for s in batch])
-                    inflight.update(zip(keys, batch))
-                    calls += len(batch)
-                done = poll() if inflight else []
-            except BaseException:
+                    inflight.update(zip(enqueue([(s["ids"], s["max_tokens"]) for s in batch]), batch))
+                    self.calls += len(batch)
+                done = poll()
+            except BaseException:               # release the waiting threads, then fail
                 with self.cv:
                     for s in list(inflight.values()) + batch:
                         s.setdefault("out", None)
                     self.cv.notify_all()
                 raise
-            t_busy += time.perf_counter() - t0
+            self.busy_s += time.perf_counter() - t0
             if done:
                 with self.cv:
                     for key, out in done:
                         inflight.pop(key)["out"] = out
                     self.cv.notify_all()
-        self.batches.append((calls, t_busy))
 
 
 class TokenPolicy:
@@ -178,9 +132,6 @@ class TokenPolicy:
     def __init__(self, episode, broker, tokenizer, cap, window, rows):
         self.episode, self.broker, self.tok = episode, broker, tokenizer
         self.cap, self.window, self.rows = cap, window, rows
-
-    def expect(self, n):
-        self.broker.expect(n)
 
     def __call__(self, agent, messages, tools):
         try:
@@ -194,10 +145,9 @@ class TokenPolicy:
             traceback.print_exc()
             room = 0
         if room < 16:                   # no room left in the window: the agent's turn ends
-            self.broker.cancel()
             return None
         max_tokens = min(self.cap, room)
-        out = self.broker.submit(self.episode, ids, max_tokens)
+        out = self.broker.submit(ids, max_tokens)
         if out is None:
             return None
         with self.broker.lock:
@@ -214,9 +164,10 @@ class TokenPolicy:
         return msg
 
 
-def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=None, stream=None):
+def run_groups(cfg, seeds, shared, engine, tokenizer, cap, window, workdir=None):
     """One group of cfg.G rollouts per seed. Returns (groups, rows, broker).
 
+    engine is (enqueue, poll), as `Broker.serve` takes them.
     shared=True: the G agents of a group work on one machine (one Environment 1 episode).
     shared=False: each agent gets a machine to itself, with the same seed and so the same
     request and deadlock plan as agent 0; nothing an agent does can reach another.
@@ -224,7 +175,6 @@ def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=Non
     groups[g] is a list of G dicts {"reward", "summary", "episode"} (None for a rollout
     whose episode failed); rows are the model calls, each tagged with (group, member).
     """
-    import dataclasses
     specs = []                          # (group, members, episode config)
     for g, seed in enumerate(seeds):
         if shared:
@@ -232,7 +182,7 @@ def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=Non
         else:
             solo = dataclasses.replace(cfg, G=1)
             specs.extend((g, [m], solo, seed) for m in range(cfg.G))
-    broker = Broker(len(specs), generate)
+    broker = Broker(len(specs))
     rows, results = [], [None] * len(specs)
 
     def work(i):
@@ -248,10 +198,7 @@ def run_groups(cfg, seeds, shared, generate, tokenizer, cap, window, workdir=Non
     threads = [threading.Thread(target=work, args=(i,), daemon=True) for i in range(len(specs))]
     for t in threads:
         t.start()
-    if stream:                      # (submit, poll): see Broker.serve_stream
-        broker.serve_stream(*stream)
-    else:
-        broker.serve()
+    broker.serve(*engine)
     for t in threads:
         t.join()
 

@@ -59,26 +59,12 @@ class Env1Config(grpo.ReferenceConfig):
     shared_machine: bool = field(default=True, metadata={
         "help": "the rollouts of a group run on one machine and can reach each other's "
                 "jobs. False gives each rollout a machine to itself"})
-    env_steps: int = 8
-    env_deadline: int = 20
-    env_hangs: int = 2
-    kill_by_name_tool: bool = True
-    env_progress_credit: float = field(default=0.25, metadata={
-        "help": "weight of progress (steps done / steps) in the reward; completion is "
-                "0.5 and speed gets the rest. 0 is the reward of runs before 2026-11-15"})
-    env_queue_calls: bool = field(default=True, metadata={
-        "help": "tool calls beyond two per minute run in the following minutes; False "
-                "refuses them (the rule before 2026-11-15)"})
-    continuous_generation: bool = field(default=True, metadata={
-        "help": "feed vLLM as calls arrive, so an episode waits only for its own agents' "
-                "calls. False generates in rounds: every call of every episode, then wait "
-                "for the longest (runs before 2026-11-16)"})
+    kill_by_name_tool: bool = field(default=True, metadata={
+        "help": "False leaves `kill` with a pid only, so no single call can reach a "
+                "peer's job by accident"})
     eval_only: bool = field(default=False, metadata={
         "help": "run the rollouts and record them, but make no update: for measuring the "
                 "untrained model or a checkpoint (--model <path>) on fixed seeds"})
-    log_tokens: bool = field(default=True, metadata={
-        "help": "write each call's sampled token ids and vLLM log-probs to "
-                "tokens/step_<n>.jsonl (about 3 MB per step of 32 rollouts)"})
     data_seed: int = field(default=1000000, metadata={
         "help": "first episode seed; group i of the run uses data_seed + i"})
     token_budget: int = field(default=8192, metadata={
@@ -86,10 +72,9 @@ class Env1Config(grpo.ReferenceConfig):
                 "not method"})
     description: str = ""
 
-    # Unscaled, as in the reference recipe. Dividing by the group's standard deviation
-    # (`group`) was tried in env1_grpo_shared_s0: a group whose rewards were 0.93, 1, 1, 1
-    # (one agent a minute late) got advantages -1.5, 0.5, 0.5, 0.5, the same size as a
-    # group where one agent failed outright.
+    # Advantages are not divided by the group's standard deviation: that turned a group
+    # whose rewards were 0.93, 1, 1, 1 (one agent a minute late) into -1.5, 0.5, 0.5, 0.5,
+    # the same size as a group where one agent failed outright (env1_grpo_shared_s0).
     scale_rewards: str = "none"
     num_generations: int | None = 4
     # The cap is per model call. Measured with a cap of 4096 that no call reached
@@ -120,8 +105,8 @@ class Env1Config(grpo.ReferenceConfig):
             raise ValueError(f"--baseline must be one of {BASELINES}")
         if self.baseline == "other_groups" and self.groups_per_step < 2:
             raise ValueError("--baseline other_groups needs at least two groups per step")
-        if self.scale_rewards not in ("group", "none"):
-            raise ValueError("--scale_rewards must be group or none")
+        if self.scale_rewards != "none":
+            raise ValueError("advantages are not scaled in this project")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
         if self.eval_only:              # no optimizer state worth building or saving
@@ -139,28 +124,15 @@ class Env1Config(grpo.ReferenceConfig):
         super().__post_init__()
 
     def env(self):
-        return harness.Config(G=self.num_generations, steps=self.env_steps,
-                              deadline=self.env_deadline, hangs=self.env_hangs,
-                              kill_by_name_tool=self.kill_by_name_tool,
-                              progress_credit=self.env_progress_credit,
-                              queue_calls=self.env_queue_calls)
+        return harness.Config(G=self.num_generations, kill_by_name_tool=self.kill_by_name_tool)
 
 
-def advantages(rewards, baseline, scale="none"):
+def advantages(rewards, baseline):
     """rewards[g][m] is a float, or None for a rollout that failed (it gets no advantage
     and is left out of every mean).
-
-    scale="group" divides by the standard deviation (n - 1, as TRL's) of the rewards the
-    baseline was taken from, plus 1e-4: the rollout's own group for `group` and `loo`,
-    the other groups for `other_groups`. A set that all scored the same gives 0.
     """
     mean = lambda xs: sum(xs) / len(xs) if xs else None
 
-    def std(xs):
-        if len(xs) < 2:
-            return 0.0
-        mu = mean(xs)
-        return (sum((x - mu) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
     flat = [[r for r in grp if r is not None] for grp in rewards]
     out = []
     for g, grp in enumerate(rewards):
@@ -169,16 +141,13 @@ def advantages(rewards, baseline, scale="none"):
             if r is None:
                 row.append(None)
                 continue
-            ref = flat[g]
             if baseline == "group":
                 b = mean(flat[g])
             elif baseline == "loo":
                 b = mean([x for k, x in enumerate(grp) if k != m and x is not None])
             else:
-                ref = [x for h, other in enumerate(flat) if h != g for x in other]
-                b = mean(ref)
-            a = 0.0 if b is None else r - b
-            row.append(a / (std(ref) + 1e-4) if scale == "group" else a)
+                b = mean([x for h, other in enumerate(flat) if h != g for x in other])
+            row.append(0.0 if b is None else r - b)
         out.append(row)
     return out
 
@@ -209,27 +178,6 @@ class Env1Trainer(grpo.Trainer):
         self.env_cfg = env_cfg
         self.rollout_log = Path(self.args.output_dir) / "rollouts.jsonl"
 
-    # ---- generation -------------------------------------------------------------------
-    def _vllm_generate(self, requests):
-        """[(prompt ids, max tokens)] -> [{ids, logprobs, finish_reason}], one vLLM call.
-        Sampling settings are the ones TRL's own colocated call uses."""
-        from vllm import SamplingParams
-        vg = self.vllm_generation
-        base = dict(n=1, repetition_penalty=vg.repetition_penalty, temperature=vg.temperature,
-                    top_p=vg.top_p, top_k=vg.top_k, min_p=0.0 if vg.min_p is None else vg.min_p,
-                    logprobs=vg.logprobs)
-        base.update(vg.generation_kwargs)
-        params = [SamplingParams(**{**base, "max_tokens": m}) for _, m in requests]
-        outs = vg.llm.generate([{"prompt_token_ids": ids} for ids, _ in requests],
-                               sampling_params=params, use_tqdm=False)
-        res = []
-        for o in outs:
-            c = o.outputs[0]
-            ids = list(c.token_ids)
-            lps = [lp[t].logprob for t, lp in zip(ids, c.logprobs)]
-            res.append({"ids": ids, "logprobs": lps, "finish_reason": c.finish_reason})
-        return res
-
     def create_scheduler(self, num_training_steps, optimizer=None):
         """Constant with a linear warm-up that starts above zero: step s of the warm-up
         runs at (s + 1) / (warmup_steps + 1) of the learning rate. transformers' version
@@ -243,22 +191,25 @@ class Env1Trainer(grpo.Trainer):
             return self.lr_scheduler
         return super().create_scheduler(num_training_steps, optimizer)
 
-    def _vllm_stream(self):
-        """(submit, poll) for Broker.serve_stream, on vLLM's own queue."""
+    # ---- generation -------------------------------------------------------------------
+    def _engine(self):
+        """(enqueue, poll) for Broker.serve, on vLLM's own queue. Sampling settings are
+        the ones TRL's colocated call uses."""
         from vllm import SamplingParams
         vg = self.vllm_generation
         base = dict(n=1, repetition_penalty=vg.repetition_penalty, temperature=vg.temperature,
                     top_p=vg.top_p, top_k=vg.top_k, min_p=0.0 if vg.min_p is None else vg.min_p,
                     logprobs=vg.logprobs)
         base.update(vg.generation_kwargs)
+        # vLLM's internal request id is "<counter>-<8 random characters>"; depending on
+        # the call it reports the whole id or the counter alone, so the counter is the key.
+        key = lambda rid: str(rid).split("-", 1)[0]
 
-        def submit(requests):
+        def enqueue(requests):
             ids = vg.llm.enqueue([{"prompt_token_ids": i} for i, _ in requests],
                                  sampling_params=[SamplingParams(**{**base, "max_tokens": m})
                                                   for _, m in requests], use_tqdm=False)
-            # vLLM returns its internal id, "<counter>-<8 random characters>"; finished
-            # outputs carry the counter alone.
-            return [str(i).rsplit("-", 1)[0] for i in ids]
+            return [key(i) for i in ids]
 
         def poll():
             done = []
@@ -266,12 +217,11 @@ class Env1Trainer(grpo.Trainer):
                 if o.finished:
                     c = o.outputs[0]
                     ids = list(c.token_ids)
-                    done.append((str(o.request_id).rsplit("-", 1)[0] if "-" in str(o.request_id)
-                                 else str(o.request_id),
-                                 {"ids": ids, "logprobs": [lp[t].logprob for t, lp in zip(ids, c.logprobs)],
-                                  "finish_reason": c.finish_reason}))
+                    done.append((key(o.request_id), {
+                        "ids": ids, "logprobs": [lp[t].logprob for t, lp in zip(ids, c.logprobs)],
+                        "finish_reason": c.finish_reason}))
             return done
-        return submit, poll
+        return enqueue, poll
 
     def _collect(self, inputs):
         G = self.env_cfg.G
@@ -280,8 +230,8 @@ class Env1Trainer(grpo.Trainer):
             "the rollouts of a group must be consecutive rows of one seed"
         vg = self.vllm_generation
         # TRL's own generate() puts vLLM to sleep after every call, dropping its weights
-        # (level 2) and its prefix cache. A step here makes ~20 calls, so vLLM is woken
-        # once, used for all of them, and put to sleep before the backward passes.
+        # (level 2) and its prefix cache. A step here makes hundreds of calls, so vLLM is
+        # woken once, used for all of them, and put to sleep before the backward passes.
         if self.state.global_step != self._last_loaded_step or vg._llm_weights_sleeping:
             vg.sync_weights()
             self._last_loaded_step = self.state.global_step
@@ -289,10 +239,9 @@ class Env1Trainer(grpo.Trainer):
             vg.llm.wake_up(tags=["kv_cache"])
         try:
             return seeds, *rollout.run_groups(
-                self.env_cfg, seeds, self.args.shared_machine, self._vllm_generate,
+                self.env_cfg, seeds, self.args.shared_machine, self._engine(),
                 self.processing_class, self.max_completion_length,
-                self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"),
-                stream=self._vllm_stream() if self.args.continuous_generation else None)
+                self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"))
         finally:
             if vg.enable_sleep_mode:
                 vg.llm.sleep(level=2)
@@ -307,7 +256,7 @@ class Env1Trainer(grpo.Trainer):
         t_gen = time.perf_counter() - t0
 
         rewards = [[None if x is None else x["reward"] for x in grp] for grp in groups]
-        adv = advantages(rewards, self.args.baseline, self.args.scale_rewards)
+        adv = advantages(rewards, self.args.baseline)
         scored = sum(r is not None for grp in rewards for r in grp)
         self._record(seeds, groups, rows, adv, broker, t_gen)
         for r in rows:
@@ -407,8 +356,8 @@ class Env1Trainer(grpo.Trainer):
         put("env/renamed", share(lambda s: s["renamed"]))
         # A reply without a tool call ends the agent's turn. After the job has finished
         # that is the requested message; before, the job runs on unwatched.
-        put("env/stopped_unfinished", share(lambda s: s["gave_up"] and not s["finished"]))
-        put("env/replied", share(lambda s: s["gave_up"]))
+        put("env/stopped_unfinished", share(lambda s: s["replied"] and not s["finished"]))
+        put("env/replied", share(lambda s: s["replied"]))
         put("env/model_calls", avg(lambda s: s["model_calls"]))
         put("env/failed_rollouts", sum(x is None for grp in groups for x in grp))
         # Truncation: the cap can bind more as training lengthens the thinking.
@@ -426,8 +375,7 @@ class Env1Trainer(grpo.Trainer):
             / max(1, len(adv)))
         put("rows/total", len(rows))
         put("time/generate_s", t_gen)
-        put("time/vllm_s", sum(s for _, s in broker.batches))
-        put("gen/batches", len(broker.batches))
+        put("time/vllm_s", broker.busy_s)
         episodes, seen = [], set()
         for grp in groups:
             for x in grp:
@@ -442,27 +390,25 @@ class Env1Trainer(grpo.Trainer):
                "calls": [{k: r[k] for k in ("group", "member", "prompt_tokens",
                                             "completion_tokens", "finish_reason", "hit_cap")}
                          for r in rows],
-               "generation_batches": [(c, round(s, 2)) for c, s in broker.batches],
                "generate_s": round(t_gen, 1), "episodes": episodes}
         with open(self.rollout_log, "a") as f:
             f.write(json.dumps(rec) + "\n")
-        if self.args.log_tokens:
-            # One file per step, so a resumed run overwrites the steps it repeats. Rows
-            # are in call order within a rollout; `prompt_tokens` is enough to rebuild
-            # the prompt from the transcript (rl/check_rows.py).
-            d = Path(self.args.output_dir) / "tokens"
-            d.mkdir(exist_ok=True)
-            with open(d / f"step_{step:05d}.jsonl", "w") as f:
-                for r in rows:
-                    f.write(json.dumps({k: r[k] for k in (
-                        "group", "member", "prompt_tokens", "completion_ids", "logprobs",
-                        "finish_reason")}) + "\n")
+        # Each call's sampled token ids and vLLM log-probs (about 3 MB per step of 32
+        # rollouts). One file per step, so a resumed run overwrites the steps it repeats.
+        # Rows are in call order within a rollout; `prompt_tokens` is enough to rebuild
+        # the prompt from the transcript (rl/check_rows.py).
+        d = Path(self.args.output_dir) / "tokens"
+        d.mkdir(exist_ok=True)
+        with open(d / f"step_{step:05d}.jsonl", "w") as f:
+            for r in rows:
+                f.write(json.dumps({k: r[k] for k in (
+                    "group", "member", "prompt_tokens", "completion_ids", "logprobs",
+                    "finish_reason")}) + "\n")
         print(f"step {step}: reward {sum(rew) / n:.3f}  finished {share(lambda s: s['finished']):.2f}  "
               f"by-name {share(lambda s: s['kill_by_name_calls']):.2f}  "
               f"sibling-running kills/rollout {avg(sib):.2f}  renamed {share(lambda s: s['renamed']):.2f}  "
               f"calls {len(rows)}  tok/call {sum(per_call) / max(1, len(per_call)):.0f}  "
-              f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s "
-              f"in {len(broker.batches)} batches", flush=True)
+              f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s", flush=True)
 
 
 def placeholder_reward(prompts, completions, **kwargs):
@@ -496,11 +442,11 @@ def main():
         vllm_max_len=cfg.vllm_max_model_length, temperature=cfg.temperature,
         top_p=cfg.top_p, top_k=cfg.top_k, seed=cfg.seed, data_seed=cfg.data_seed,
         optim="master_adamw_fp32" if cfg.master_weights else cfg.optim,
-        loss_type=cfg.loss_type, scale_rewards=cfg.scale_rewards, beta=cfg.beta,
+        loss_type=cfg.loss_type, beta=cfg.beta,
         mask_truncated_completions=cfg.mask_truncated_completions,
         vllm_importance_sampling_mode=cfg.vllm_importance_sampling_mode,
         token_budget=cfg.token_budget, description=cfg.description,
-        system_prompt=harness.SYSTEM, task=harness.TASKS[env_cfg.task_style],
+        system_prompt=harness.SYSTEM, task=harness.TASK,
         job=os.environ.get("SLURM_JOB_ID"))
     (root / "run.json").write_text(json.dumps(record, indent=2))
     print(json.dumps({k: v for k, v in record.items() if k not in ("system_prompt", "task")}),

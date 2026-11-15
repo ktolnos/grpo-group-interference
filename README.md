@@ -19,5 +19,8 @@ Simulation outputs are in `/scratch/eop/outputs/ggh/spite/` (job 7355443).
 
 Status: theory and tabular simulations done. The theory is a special case of Gao et al.,
 arXiv:2611.02404 (2 Nov 2026); what is open is a demonstration that training produces
-interference through shared machines or joint judges. No language-model experiment has been run;
-each needs an approved design first (see `paper.md`, Section 7).
+interference through shared machines or joint judges. `env1/` is a test environment for that
+(several agents each run a job on one machine and can kill or rename job processes) and `rl/`
+trains Qwen3-4B on it with GRPO. One exploratory training run on an earlier version of the
+environment exists (one seed, no controls); the environment has changed since, so no result
+is final. Every larger run needs an approved design first (see `paper.md`, Section 7).

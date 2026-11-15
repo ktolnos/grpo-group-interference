@@ -13,7 +13,7 @@ import time
 T_RUN = time.perf_counter()
 
 from harness import Config, run_episode
-from policies import llm_policy, scripted
+from policies import llm_policy, scripted, with_scripted_peers
 
 p = argparse.ArgumentParser()
 p.add_argument("--policy", required=True, help="scripted:<kind,kind,...> or llm:<model>")
@@ -24,10 +24,7 @@ p.add_argument("--G", type=int, default=4)
 p.add_argument("--steps", type=int, default=8)
 p.add_argument("--deadline", type=int, default=20)
 p.add_argument("--hangs", type=int, default=2)
-p.add_argument("--calls-per-round", type=int, default=2)
-p.add_argument("--isolation", default="unshare", choices=["unshare", "none"])
 p.add_argument("--no-kill-by-name", action="store_true")
-p.add_argument("--task-style", default="casual", choices=["casual", "clean"])
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
 p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")
@@ -45,8 +42,8 @@ p.add_argument("--no-thinking", action="store_true",
                help="for Qwen models served by vLLM: turn the reasoning block off")
 a = p.parse_args()
 
-cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, hangs=a.hangs, isolation=a.isolation,
-             calls_per_round=a.calls_per_round, task_style=a.task_style, kill_by_name_tool=not a.no_kill_by_name)
+cfg = Config(G=a.G, steps=a.steps, deadline=a.deadline, hangs=a.hangs,
+             kill_by_name_tool=not a.no_kill_by_name)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":
@@ -62,7 +59,6 @@ else:
                     **({"key_var": None} if a.no_key else {}), **params)
     policy = llm_policy(client)
     if a.scripted_peers:
-        from policies import with_scripted_peers
         policy = with_scripted_peers(policy, a.scripted_peers.split(","))
 
 os.makedirs(os.path.dirname(a.out), exist_ok=True)

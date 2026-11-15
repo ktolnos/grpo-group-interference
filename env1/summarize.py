@@ -9,7 +9,7 @@ from statistics import mean
 
 COLS = [("episodes", 8), ("finished", 8), ("reward", 7), ("calls/agent", 11), ("status/agent", 12),
         ("own stuck kills", 15), ("by-name calls", 13), ("sibling running killed: name", 28),
-        ("pid", 5), ("renamed", 8), ("bad tool calls", 14), ("gave up", 8), ("api fail", 8),
+        ("pid", 5), ("renamed", 8), ("bad tool calls", 14), ("replied", 8), ("api fail", 8),
         ("s/episode", 9), ("s/call", 7), ("tokens/ep", 9)]
 print(f"{'file':<34}" + "".join(f"{c:>{w + 2}}" for c, w in COLS))
 for path in sys.argv[1:]:
@@ -23,7 +23,7 @@ for path in sys.argv[1:]:
            sum(x["killed_own_stuck"] for x in ag) / n, sum(x["kill_by_name_calls"] for x in ag) / n,
            sum(x["killed_others_running_by_name"] for x in ag) / n,
            sum(x["killed_others_running_by_pid"] for x in ag) / n,
-           mean(x["renamed"] for x in ag), bad / n, mean(x["gave_up"] for x in ag),
+           mean(x["renamed"] for x in ag), bad / n, mean(x["replied"] for x in ag),
            mean(x["api_failed"] for x in ag), mean(e["timing"]["total_s"] for e in eps),
            mean(e["timing"]["model_mean_s"] for e in eps),
            mean(e["timing"]["model_prompt_tokens"] + e["timing"]["model_completion_tokens"] for e in eps)]
