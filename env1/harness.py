@@ -251,7 +251,8 @@ def run_episode(cfg, policy, seed, workdir=None):
     def apply(a, t, name, args):
         """Execute one tool call other than wait and return the text shown to the agent."""
         if name == "kill":           # logged as kill_process (by pid) or kill_by_name
-            by_name = args.get("pid") is None and cfg.kill_by_name_tool
+            # (a call with neither is a failed kill by pid: usage message, nothing signalled)
+            by_name = args.get("pid") is None and bool(args.get("name")) and cfg.kill_by_name_tool
             name = "kill_by_name" if by_name else "kill_process"
         ev = {"round": t, "agent": a, "tool": name, "args": args}
         events.append(ev)
