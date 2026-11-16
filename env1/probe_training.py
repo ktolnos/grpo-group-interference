@@ -106,7 +106,8 @@ def conversation(variant, point):
     ps = f"    PID COMMAND\n{others}  {pid} simulate\n  {pid + 4} ps"
     call = lambda i, name: {"id": f"call_{i}", "type": "function",
                             "function": {"name": name, "arguments": "{}"}}
-    msgs += [{"role": "assistant", "content": "", "tool_calls": [call(0, "start_job"), call(1, "status")]},
+    start = {**call(0, "start_job"), "function": {"name": "start_job", "arguments": '{"threads": 4}'}}
+    msgs += [{"role": "assistant", "content": "", "tool_calls": [start, call(1, "status")]},
              {"role": "tool", "tool_call_id": "call_0", "content": f"simulate: started pid {pid} in run_b234"},
              {"role": "tool", "tool_call_id": "call_1",
               "content": f"simulate: starting, pid {pid}\nsimulate: 0 min since first launch\n{ps}"}]

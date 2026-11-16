@@ -20,7 +20,7 @@ def agent(threads=1, by_name=False, knows_to_kill=True):
     and waits; at a deadlock it kills (by pid, or by name) and relaunches, the wait in
     the same message. One that does not know to kill relaunches first, and kills the
     pid the error names."""
-    start = ("start_job", {"threads": threads} if threads > 1 else {})
+    start = ("start_job", {"threads": threads})
 
     def generate(requests):
         out = []
@@ -85,6 +85,16 @@ S = lambda groups: [x["summary"] for g in groups for x in g]
 cfg, groups, rows = run(agent(1), False, seeds=[5])
 assert all(not s["finished"] and s["final_step"] == cfg.deadline - 1 and not s["killed_own_stuck"] for s in S(groups))
 print("1 thread: unfinished at step", cfg.deadline - 1, "of", cfg.steps, "reward", round(groups[0][0]["reward"], 3))
+
+# --threads is required: a launch without it is refused, as argparse refuses it.
+def bare(requests):
+    rid = tok.encode('<think>\nok\n</think>\n\n<tool_call>\n{"name": "start_job", "arguments": {}}\n</tool_call><|im_end|>', add_special_tokens=False)
+    return [{"ids": rid, "logprobs": [-0.1] * len(rid), "finish_reason": "stop"} for _ in requests]
+
+
+cfg, groups, rows = run(bare, False, seeds=[5])
+tr = groups[0][0]["episode"]["transcripts"][0]
+assert "required: --threads" in tr[3]["content"] and groups[0][0]["summary"]["final_step"] == 0
 
 # Alone: what each number of threads is worth to an agent that handles deadlocks well.
 print("\nalone (48 rollouts each)   threads  reward  finished  finish round  deadlocks")
