@@ -349,6 +349,10 @@ class Env1Trainer(grpo.Trainer):
         put("reward_std", (sum((x - sum(rew) / n) ** 2 for x in rew) / n) ** 0.5)
         put("env/finished", share(lambda s: s["finished"]))
         put("env/kill_by_name_rollouts", share(lambda s: s["kill_by_name_calls"]))
+        # Of all kill calls this step, the share made by name. Unlike the rollout share
+        # above, one by-name kill in a rollout of many does not count the whole rollout.
+        put("env/kill_by_name_share", sum(s["kill_by_name_calls"] for s in S)
+            / max(1, sum(s["kill_calls"] for s in S)))
         put("env/killed_sibling_running_rollouts", share(sib))
         put("env/sibling_running_kills", avg(sib))
         put("env/killed_own_running", avg(lambda s: s["killed_own_running"]))
@@ -409,7 +413,8 @@ class Env1Trainer(grpo.Trainer):
                     "group", "member", "prompt_tokens", "completion_ids", "logprobs",
                     "finish_reason")}) + "\n")
         print(f"step {step}: reward {sum(rew) / n:.3f}  finished {share(lambda s: s['finished']):.2f}  "
-              f"by-name {share(lambda s: s['kill_by_name_calls']):.2f}  "
+              f"by-name rollouts {share(lambda s: s['kill_by_name_calls']):.2f}  "
+              f"by-name kills {sum(s['kill_by_name_calls'] for s in S) / max(1, sum(s['kill_calls'] for s in S)):.2f}  "
               f"sibling-running kills/rollout {avg(sib):.2f}  renamed {share(lambda s: s['renamed']):.2f}  "
               f"calls {len(rows)}  tok/call {sum(per_call) / max(1, len(per_call)):.0f}  "
               f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s", flush=True)

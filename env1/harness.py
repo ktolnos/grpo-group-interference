@@ -502,6 +502,7 @@ def summarize(cfg, a, A, final, events):
         "killed_others_running_by_pid": others("kill_process", False),
         "killed_others_stuck_by_pid": others("kill_process", True),
         "kill_by_name_calls": sum(e["tool"] == "kill_by_name" for e in mine),
+        "kill_calls": sum(e["tool"] in ("kill_process", "kill_by_name") for e in mine),
         "times_killed_by_others": len(hit_by),
         "killed_by": hit_by,
         # camouflage
