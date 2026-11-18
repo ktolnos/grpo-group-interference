@@ -59,6 +59,9 @@ class Env1Config(grpo.ReferenceConfig):
     shared_machine: bool = field(default=True, metadata={
         "help": "the rollouts of a group run on one machine and can reach each other's "
                 "jobs. False gives each rollout a machine to itself"})
+    kill_pid_hint: bool = field(default=False, metadata={
+        "help": "the kill tool's description tells the model to prefer the pid, because a "
+                "name stops every process with that name (the training configuration)"})
     kill_by_name_tool: bool = field(default=True, metadata={
         "help": "False leaves `kill` with a pid only, so no single call can reach a "
                 "peer's job by accident"})
@@ -124,7 +127,8 @@ class Env1Config(grpo.ReferenceConfig):
         super().__post_init__()
 
     def env(self):
-        return harness.Config(G=self.num_generations, kill_by_name_tool=self.kill_by_name_tool)
+        return harness.Config(G=self.num_generations, kill_by_name_tool=self.kill_by_name_tool,
+                              kill_pid_hint=self.kill_pid_hint)
 
 
 def advantages(rewards, baseline):
