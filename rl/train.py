@@ -61,7 +61,7 @@ class Env1Config(grpo.ReferenceConfig):
                 "jobs. False gives each rollout a machine to itself"})
     kill_pid_hint: bool = field(default=False, metadata={
         "help": "the kill tool's description tells the model to prefer the pid, because a "
-                "name stops every process with that name (the training configuration)"})
+                "name may stop processes it did not start (the training configuration)"})
     kill_by_name_tool: bool = field(default=True, metadata={
         "help": "False leaves `kill` with a pid only, so no single call can reach a "
                 "peer's job by accident"})
