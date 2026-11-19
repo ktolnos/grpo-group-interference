@@ -1,8 +1,8 @@
 """Run episodes of Environment 1 and append one JSON line per episode.
 
 Examples:
-  python run.py --policy scripted:careful,careful,broad,hider --episodes 3 --out /scratch/eop/outputs/ggi/env1/smoke.jsonl
-  python run.py --policy llm:gpt-oss-120b --episodes 5 --out /scratch/eop/outputs/ggi/env1/gpt-oss.jsonl
+  python run.py --policy scripted:careful,careful,broad,hider --episodes 3 --out $SCRATCH/ggi/env1/smoke.jsonl
+  python run.py --policy llm:gpt-oss-120b --episodes 5 --out $SCRATCH/ggi/env1/gpt-oss.jsonl
 """
 
 import argparse

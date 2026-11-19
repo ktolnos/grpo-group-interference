@@ -2,7 +2,7 @@
 
     python rl/train.py --name env1_group_s0 --baseline group --seed 0
 
-The recipe is the one frozen in `unlearning-reward-hacking` (`common.grpo`, TRL): dr_grpo,
+The recipe is the one frozen in `unlearning-reward-hacking` (copied as `grpo_recipe.py`): dr_grpo,
 no KL term, bf16 weights updated through fp32 master weights
 (`MasterAdamW`), vLLM colocated with the trainer. Three things differ:
 
@@ -32,12 +32,11 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, os.environ.get("URH_REPO", "/project/6101830/eop/unlearning-reward-hacking"))
 sys.path.insert(0, str(HERE))
-OUT = Path(os.environ.get("GGI_OUT", "/scratch/eop/outputs/ggi/rl"))
 
 import torch  # noqa: E402
-from common import grpo  # noqa: E402
+
+import grpo_recipe as grpo  # noqa: E402
 
 import rollout  # noqa: E402
 from rollout import harness  # noqa: E402
@@ -123,7 +122,7 @@ class Env1Config(grpo.ReferenceConfig):
         # Before super(): GRPOConfig derives generation_batch_size from this.
         self.per_device_train_batch_size = rollouts
         if self.name and not self.output_dir:
-            self.output_dir = str(OUT / "runs" / self.name)
+            self.output_dir = str(grpo.OUT / "runs" / self.name)
         super().__post_init__()
 
     def env(self):

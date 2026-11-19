@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "/scratch/eop/outputs/ggh/spite")
+OUT = Path(sys.argv[1])        # the directory jobs/sim.sh wrote ($SCRATCH/ggi/sim)
 FIG = Path(__file__).resolve().parent / "figures"
 FIG.mkdir(exist_ok=True)
 

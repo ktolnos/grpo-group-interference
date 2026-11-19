@@ -1,0 +1,21 @@
+[project]
+name = "grpo-group-interference"
+version = "0.1.0"
+description = "Does a group-relative baseline reward rollouts for lowering their peers' rewards?"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+# Pinned to the versions the runs in RESULTS.md used (the environment of
+# github.com/ktolnos/unlearning-reward-hacking on 2026-11-19). vllm pins torch.
+dependencies = [
+    "vllm==0.29.0",
+    "trl==1.13.0",
+    "transformers==5.17.0",
+    "accelerate==1.15.0",
+    "datasets==5.0.1",
+    "numpy==2.3.5",
+    "pandas==3.0.5",
+    "matplotlib==3.11.2",
+]
+
+[tool.uv]
+package = false
