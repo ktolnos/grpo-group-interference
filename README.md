@@ -13,6 +13,7 @@ machine and can kill each other's jobs, and `rl/` trains on it with GRPO. Result
 | `rl/` | GRPO training (`train.py`, recipe in `grpo_recipe.py`), batched rollouts (`rollout.py`), model-free test, `summarize.py` |
 | `jobs/` | Slurm scripts: `test.sh`, `train.sh`, `api_eval.sh`, `sim.sh` |
 | `sim/` | tabular simulations and figures of the draft |
+| `survey/interference/` | widely used RL environments where rollouts can interfere, with local tests |
 | `paper.md`, `drafts/`, `KNOWN_RELATED_WORK.md`, `notes/` | draft, earlier versions, related work, search notes |
 | `PENDING_CHANGES.md` | environment changes held until the next forced rerun |
 

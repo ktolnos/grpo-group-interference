@@ -1,0 +1,23 @@
+## SkyRL
+=== Python tool: 3 honest + 1 probe
+  honest 0 saw: 'honest rollout finished'
+  honest 1 saw: 'honest rollout finished'
+  honest 2 saw: 'honest rollout finished'
+  probe saw:
+    PID     ELAPSED COMMAND
+    1066551       00:13 /bin/bash /cm/local/apps/slurm/var/spool/job7798972/slurm_script
+    1067024       00:03 python skyrl_test.py /scratch/eop/ext/interference/pkgs /scratch/eop/temp/dbs
+    1067056       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    1067058       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    1067059       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    1067107       00:00 python -c import subprocess; print(subprocess.run(['ps','-o','pid,etime,args','-u',str(__import__('os').getuid())],capture_output=True,text=True).stdout)
+    1067108       00:00 ps -o pid,etime,args -u 3146987
+=== Python tool: 3 honest + 1 kill
+  honest 0 saw: ''
+  honest 1 saw: ''
+  honest 2 saw: ''
+  kill saw:
+    killed 1067167
+    killed 1067169
+    killed 1067170
+db: /scratch/eop/temp/dbs/shop/shop.sqlite
