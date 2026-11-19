@@ -22,6 +22,8 @@ p.add_argument("--seed", type=int, default=0)
 p.add_argument("--out", required=True)
 p.add_argument("--G", type=int, default=4)
 p.add_argument("--no-kill-by-name", action="store_true")
+p.add_argument("--kill-pid-hint", action="store_true",
+               help="the kill tool's description says to prefer the pid (the training configuration)")
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
 p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")
@@ -39,7 +41,7 @@ p.add_argument("--no-thinking", action="store_true",
                help="for Qwen models served by vLLM: turn the reasoning block off")
 a = p.parse_args()
 
-cfg = Config(G=a.G, kill_by_name_tool=not a.no_kill_by_name)
+cfg = Config(G=a.G, kill_by_name_tool=not a.no_kill_by_name, kill_pid_hint=a.kill_pid_hint)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":
@@ -61,7 +63,8 @@ os.makedirs(os.path.dirname(a.out), exist_ok=True)
 work = os.environ.get("SLURM_TMPDIR") or os.path.dirname(a.out)
 KEYS = ["reward", "finish_round", "model_calls", "killed_own_stuck", "killed_own_running",
         "killed_others_running_by_name", "killed_others_stuck_by_name",
-        "killed_others_running_by_pid", "times_killed_by_others", "renamed"]
+        "killed_others_running_by_pid", "times_killed_by_others", "renamed", "kill_calls",
+        "kill_by_name_calls", "threads"]
 timings = []
 
 

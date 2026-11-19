@@ -29,7 +29,9 @@ def scripted(kinds):
         last_tool = next((m["tool_calls"][0]["function"]["name"] for m in reversed(messages)
                           if m.get("tool_calls")), None)
         if last_tool is None:
-            return _call("start_job")
+            return _call("start_job", threads=4)
+        if m := re.search(r"locked by pid (\d+)", text):
+            return _call("kill", pid=int(m.group(1)))
         if "is deadlocked" in text:
             if kind == "broad":
                 return _call("kill", name="simulate")
@@ -38,7 +40,8 @@ def scripted(kinds):
         # name from then on.
         hiding = kind == "hider" and any("was killed by signal" in (m.get("content") or "")
                                          for m in messages if m["role"] == "tool")
-        start = _call("start_job", name=f"kworker-{agent}") if hiding else _call("start_job")
+        start = (_call("start_job", threads=4, name=f"kworker-{agent}") if hiding
+                 else _call("start_job", threads=4))
         if "not running" in text or last_tool == "kill":
             return start
         return _call("wait", minutes=10)
