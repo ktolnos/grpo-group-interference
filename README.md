@@ -31,11 +31,12 @@ sbatch jobs/test.sh                    # CPU, ~3 min: environment and rollout pa
 Then, always from the repository root:
 
 ```bash
-# GRPO, shared machine, training configuration (~5 min/step on an H100, ~15 on an L40S)
-sbatch jobs/train.sh --name deadlock_recovery_shared_grpo_s0 --kill_pid_hint True --seed 0
-# the untrained model, no updates, 160 rollouts on the evaluation seeds
-sbatch --time=3:00:00 --mem=48G jobs/train.sh --name eval_base_shared --eval_only True \
-    --max_steps 5 --data_seed 5000000
+# GRPO, shared machine (~5 min/step on an H100, ~15 on an L40S)
+sbatch jobs/train.sh --name deadlock_recovery_shared_grpo_s0 --seed 0
+# the untrained model, no trainer: 160 rollouts on the evaluation seeds, all at once
+sbatch --time=1:00:00 --mem=32G --cpus-per-task=12 jobs/train.sh \
+    --name deadlock_recovery_shared_eval_base --eval_only True --groups_per_step 40 \
+    --max_steps 1 --data_seed 5000000
 # a hosted model, four conditions (needs $VECTOR_INFERENCE_API_KEY)
 sbatch jobs/api_eval.sh gpt-oss-120b gptoss
 python rl/summarize.py --steps $SCRATCH/ggi/rl/runs/deadlock_recovery_shared_grpo_s0

@@ -5,13 +5,16 @@ answer through the same token-level interface the trainer uses.
 """
 import json
 import re
+import tempfile
+import types
+from pathlib import Path
 
 from transformers import AutoTokenizer
 
 import deadlock_recovery
 import rollout
 from deadlock_recovery import harness
-from train import advantages, pack
+from train import advantages, evaluate, pack
 
 tok = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 
@@ -193,4 +196,21 @@ for b in ("group", "loo", "other_groups"):
     print("  ", b, [round(a, 3) for a in advantages(rew, b)[0]])
 print("  micro-batches", [len(b) for b in pack(rows, 8192)][:8])
 print(advantages([[1.0, 0.5, None, 0.0], [1.0, 1.0, 1.0, 1.0]], "group"))
+
+# The evaluation path: steps of groups on consecutive seeds, recorded as training's are,
+# and no second evaluation into the same directory.
+with tempfile.TemporaryDirectory() as d:
+    c = types.SimpleNamespace(max_steps=2, groups_per_step=2, num_generations=4, data_seed=100,
+                              shared_machine=True, baseline="group",
+                              max_completion_length=3072, vllm_max_model_length=7168)
+    evaluate(c, deadlock_recovery, harness.Config(), tok, Path(d), eng=engine(agent(4)))
+    recs = [json.loads(line) for line in open(Path(d) / "rollouts.jsonl")]
+    assert [r["seeds"] for r in recs] == [[100, 101], [102, 103]]
+    assert all(len(r["summaries"]) == 2 and len(r["episodes"]) == 2 for r in recs)
+    assert len(list((Path(d) / "tokens").glob("step_*.jsonl"))) == 2
+    try:
+        evaluate(c, deadlock_recovery, harness.Config(), tok, Path(d), eng=engine(agent(4)))
+        raise AssertionError("a second evaluation into the same directory must be refused")
+    except FileExistsError:
+        pass
 print("ok")

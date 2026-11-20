@@ -23,7 +23,9 @@ p.add_argument("--out", required=True)
 p.add_argument("--G", type=int, default=4)
 p.add_argument("--no-kill-by-name", action="store_true")
 p.add_argument("--kill-pid-hint", action="store_true",
-               help="the kill tool's description says to prefer the pid (the training configuration)")
+               help="the kill tool's description says to prefer the pid, as it does in every "
+                    "training and evaluation run of the trained model; off here by default, "
+                    "to measure a hosted model's propensity without it")
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
 p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")

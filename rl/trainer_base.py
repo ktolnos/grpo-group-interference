@@ -9,6 +9,7 @@ Adapted from `common/grpo.py` of github.com/ktolnos/unlearning-reward-hacking (c
 b51efc4, 2026-11-06). The measurements quoted below are that project's.
 """
 
+import contextlib
 import copy
 import dataclasses
 import os
@@ -259,9 +260,63 @@ class MasterAdamW(torch.optim.Optimizer):
             p.data.copy_(m)
 
 
+def vllm_settings(args):
+    """VLLMGeneration's arguments as GRPOTrainer derives them from the config (trl 1.13,
+    `GRPOTrainer.__init__`). An evaluation builds its engine from these without a trainer
+    (`vllm_engine`), and `Trainer.__init__` checks that the trainer's own engine has the
+    same, so the two cannot drift apart."""
+    return dict(
+        mode=args.vllm_mode, tensor_parallel_size=args.vllm_tensor_parallel_size,
+        gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+        max_model_length=args.vllm_max_model_length,
+        max_num_seqs=(args.per_device_train_batch_size * args.vllm_tensor_parallel_size
+                      * args.steps_per_generation),
+        enable_sleep_mode=args.vllm_enable_sleep_mode, model_impl=args.vllm_model_impl,
+        trust_remote_code=args.trust_remote_code, repetition_penalty=args.repetition_penalty,
+        temperature=args.temperature, top_p=args.top_p, top_k=args.top_k, min_p=args.min_p,
+        max_completion_length=args.max_completion_length, logprobs=0,
+        generation_kwargs=args.generation_kwargs or {})
+
+
+@contextlib.contextmanager
+def seeded_vllm(seed):
+    """Add the run's seed to the one TRL gives its colocated vLLM engine while the engine
+    is built. TRL seeds it with the process index alone, so every single-GPU run would
+    sample from seed 0 whatever `--seed` says."""
+    import trl.generation.vllm_generation as vllm_generation
+    engine = vllm_generation.LLM
+
+    def seeded(*a, **kw):
+        kw["seed"] = kw.get("seed", 0) + seed
+        print(f"vLLM engine seed {kw['seed']} (run seed {seed})", flush=True)
+        return engine(*a, **kw)
+
+    vllm_generation.LLM = seeded
+    try:
+        yield
+    finally:
+        vllm_generation.LLM = engine
+
+
+def vllm_engine(args, tokenizer, gpu_share=0.9):
+    """The colocated vLLM engine without a trainer, for evaluation: vLLM loads the model
+    from `args.model` itself, stays awake, and takes `gpu_share` of the GPU, since nothing
+    else is on it. Under a trainer it has 0.35 and sleeps during the backward passes.
+    Sampling is the trainer's (`vllm_settings`)."""
+    from accelerate import Accelerator
+    from trl.generation.vllm_generation import VLLMGeneration
+    model = torch.nn.Module()           # all the engine reads of the trainer's model:
+    model.name_or_path = args.model     # where its weights are
+    settings = {**vllm_settings(args), "enable_sleep_mode": False,
+                "gpu_memory_utilization": gpu_share}
+    with seeded_vllm(args.seed or 0):
+        return VLLMGeneration(model=model, accelerator=Accelerator(),
+                              processing_class=tokenizer, **settings)
+
+
 class Trainer(GRPOTrainer):
-    """GRPOTrainer with MasterAdamW as its optimizer, the run's seed in vLLM, and every
-    stop token treated as a finished completion.
+    """GRPOTrainer with MasterAdamW as its optimizer, the run's seed in vLLM
+    (`seeded_vllm`), and every stop token treated as a finished completion.
 
     The last is for models whose turn terminator is not their `eos_token`. TRL tests
     `ids[-1] not in (eos_token_id, pad_token_id)` to decide a completion was truncated,
@@ -281,23 +336,15 @@ class Trainer(GRPOTrainer):
     """
 
     def __init__(self, *args, **kwargs):
-        # TRL seeds its colocated vLLM engine with the process index alone, so every
-        # single-GPU run would sample from seed 0 whatever `--seed` says. The run's seed
-        # is added to TRL's while the engine is built.
-        import trl.generation.vllm_generation as vllm_generation
-        seed = getattr(kwargs.get("args"), "seed", 0) or 0
-        engine = vllm_generation.LLM
-
-        def seeded(*a, **kw):
-            kw["seed"] = kw.get("seed", 0) + seed
-            print(f"vLLM engine seed {kw['seed']} (run seed {seed})", flush=True)
-            return engine(*a, **kw)
-
-        vllm_generation.LLM = seeded
-        try:
+        with seeded_vllm(getattr(kwargs.get("args"), "seed", 0) or 0):
             super().__init__(*args, **kwargs)
-        finally:
-            vllm_generation.LLM = engine
+        mine = vllm_settings(self.args)
+        theirs = {k: getattr(self.vllm_generation, k) for k in mine}
+        if mine != theirs:
+            raise RuntimeError(
+                "vllm_settings no longer matches the engine GRPOTrainer builds, so an "
+                "evaluation would sample differently from training: "
+                + str({k: (mine[k], theirs[k]) for k in mine if mine[k] != theirs[k]}))
         if not hasattr(self, "_tokenizer"):
             raise AttributeError(
                 "TRL no longer keeps the trainer's tokenizer on `_tokenizer`; point this "

@@ -28,9 +28,11 @@ run_episode = harness.run_episode
 
 @dataclass
 class Args:
-    kill_pid_hint: bool = field(default=False, metadata={
+    kill_pid_hint: bool = field(default=True, metadata={
         "help": "the kill tool's description tells the model to prefer the pid, because a "
-                "name may stop processes it did not start (the training configuration)"})
+                "name may stop processes it did not start. On for training and for "
+                "evaluating the trained model alike; hosted models, which are not "
+                "trained, can be run without it (deadlock_recovery/run.py)"})
     kill_by_name_tool: bool = field(default=True, metadata={
         "help": "False leaves `kill` with a pid only, so no single call can reach a "
                 "peer's job by accident"})

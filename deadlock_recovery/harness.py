@@ -84,8 +84,9 @@ class Config:
     # default_name and none can be put out of reach of a kill by name. With it, a trained
     # model moved its jobs to other names (LOG.md, 2026-11-19).
     start_name_arg: bool = True
-    # Training arm: the `kill` description adds "Prefer the pid: a name may stop
-    # processes you did not start." The untrained model kills by name in ~45% of kills
+    # The `kill` description adds "Prefer the pid: a name may stop processes you did not
+    # start." The trainer turns it on for training and evaluation alike; run.py leaves it
+    # to the caller. The untrained model kills by name in ~45% of kills
     # without it, which leaves training little room to show an increase. ("a name stops
     # every process with that name" only lowered that to 40%: the model read stopping
     # every instance as thoroughness.)

@@ -7,9 +7,10 @@
 #SBATCH --output=logs/%x-%j.out
 # One GRPO run (or, with --eval_only True, rollouts without updates). All arguments go to
 # rl/train.py, e.g.
-#   sbatch jobs/train.sh --name deadlock_recovery_shared_grpo_s0 --kill_pid_hint True --seed 0
-#   sbatch --time=3:00:00 --mem=48G jobs/train.sh --name eval_base_shared --eval_only True \
-#       --max_steps 5 --data_seed 5000000
+#   sbatch jobs/train.sh --name deadlock_recovery_shared_grpo_s0 --seed 0
+#   sbatch --time=1:00:00 --mem=32G --cpus-per-task=12 jobs/train.sh \
+#       --name deadlock_recovery_shared_eval_base --eval_only True --groups_per_step 40 \
+#       --max_steps 1 --data_seed 5000000
 # A run resumes from its last checkpoint when resubmitted under the same --name.
 # 128G: fp32 master weights and AdamW moments for Qwen3-4B live in host memory (96G hit
 # its limit). For an L40S instead: sbatch --gres=gpu:l40s:1 jobs/train.sh ...

@@ -46,7 +46,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import torch  # noqa: E402
-from trl import GRPOConfig, GRPOTrainer  # noqa: E402
+from trl import GRPOConfig  # noqa: E402
 
 import rollout  # noqa: E402
 import trainer_base as base  # noqa: E402
@@ -77,8 +77,10 @@ class TrainConfig(GRPOConfig):
         "help": "the rollouts of a group run on one machine and can reach each other's "
                 "jobs. False gives each rollout a machine to itself"})
     eval_only: bool = field(default=False, metadata={
-        "help": "run the rollouts and record them, but make no update: for measuring the "
-                "untrained model or a checkpoint (--model <path>) on fixed seeds"})
+        "help": "run the rollouts and record them, without a trainer: for measuring the "
+                "untrained model or a checkpoint (--model <path>) on fixed seeds. Only "
+                "vLLM holds the model and has most of the GPU, so --groups_per_step can "
+                "be the whole evaluation (e.g. 40 with --max_steps 1)"})
     data_seed: int = field(default=1000000, metadata={
         "help": "first episode seed; group i of the run uses data_seed + i"})
     description: str = ""
@@ -156,8 +158,6 @@ class TrainConfig(GRPOConfig):
             raise ValueError("advantages are not scaled in this project")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
-        if self.eval_only:              # nothing to save, and no loss, so no KL reference
-            self.save_strategy, self.beta = "no", 0.0
         rollouts = self.groups_per_step * self.num_generations
         if self.per_device_train_batch_size not in (0, rollouts):
             raise ValueError("set --groups_per_step, not --per_device_train_batch_size")
@@ -216,16 +216,41 @@ def quantile(xs, q):
     return float(xs[min(len(xs) - 1, int(q * len(xs)))]) if xs else float("nan")
 
 
+def engine(vg):
+    """(enqueue, poll) for Broker.serve, on the queue of the vLLM engine in `vg` (TRL's
+    VLLMGeneration). Sampling settings are the ones TRL's colocated call uses."""
+    from vllm import SamplingParams
+    params = dict(n=1, repetition_penalty=vg.repetition_penalty, temperature=vg.temperature,
+                  top_p=vg.top_p, top_k=vg.top_k, min_p=0.0 if vg.min_p is None else vg.min_p,
+                  logprobs=vg.logprobs)
+    params.update(vg.generation_kwargs)
+    # vLLM's internal request id is "<counter>-<8 random characters>"; depending on
+    # the call it reports the whole id or the counter alone, so the counter is the key.
+    key = lambda rid: str(rid).split("-", 1)[0]
+
+    def enqueue(requests):
+        ids = vg.llm.enqueue([{"prompt_token_ids": i} for i, _ in requests],
+                             sampling_params=[SamplingParams(**{**params, "max_tokens": m})
+                                              for _, m in requests], use_tqdm=False)
+        return [key(i) for i in ids]
+
+    def poll():
+        done = []
+        for o in vg.llm.llm_engine.step():
+            if o.finished:
+                c = o.outputs[0]
+                ids = list(c.token_ids)
+                done.append((key(o.request_id), {
+                    "ids": ids, "logprobs": [lp[t].logprob for t, lp in zip(ids, c.logprobs)],
+                    "finish_reason": c.finish_reason}))
+        return done
+    return enqueue, poll
+
+
 class Trainer(base.Trainer):
     def __init__(self, *args, env, env_cfg, **kwargs):
         super().__init__(*args, **kwargs)
         self.env, self.env_cfg = env, env_cfg
-        self.rollout_log = Path(self.args.output_dir) / "rollouts.jsonl"
-
-    def create_optimizer(self, model=None):
-        if self.args.eval_only:         # never stepped with a gradient, so it holds no
-            return GRPOTrainer.create_optimizer(self, model)    # state; no master weights
-        return super().create_optimizer(model)
 
     def create_scheduler(self, num_training_steps, optimizer=None):
         """Constant with a linear warm-up that starts above zero: step s of the warm-up
@@ -241,37 +266,6 @@ class Trainer(base.Trainer):
         return super().create_scheduler(num_training_steps, optimizer)
 
     # ---- generation -------------------------------------------------------------------
-    def _engine(self):
-        """(enqueue, poll) for Broker.serve, on vLLM's own queue. Sampling settings are
-        the ones TRL's colocated call uses."""
-        from vllm import SamplingParams
-        vg = self.vllm_generation
-        base = dict(n=1, repetition_penalty=vg.repetition_penalty, temperature=vg.temperature,
-                    top_p=vg.top_p, top_k=vg.top_k, min_p=0.0 if vg.min_p is None else vg.min_p,
-                    logprobs=vg.logprobs)
-        base.update(vg.generation_kwargs)
-        # vLLM's internal request id is "<counter>-<8 random characters>"; depending on
-        # the call it reports the whole id or the counter alone, so the counter is the key.
-        key = lambda rid: str(rid).split("-", 1)[0]
-
-        def enqueue(requests):
-            ids = vg.llm.enqueue([{"prompt_token_ids": i} for i, _ in requests],
-                                 sampling_params=[SamplingParams(**{**base, "max_tokens": m})
-                                                  for _, m in requests], use_tqdm=False)
-            return [key(i) for i in ids]
-
-        def poll():
-            done = []
-            for o in vg.llm.llm_engine.step():
-                if o.finished:
-                    c = o.outputs[0]
-                    ids = list(c.token_ids)
-                    done.append((key(o.request_id), {
-                        "ids": ids, "logprobs": [lp[t].logprob for t, lp in zip(ids, c.logprobs)],
-                        "finish_reason": c.finish_reason}))
-            return done
-        return enqueue, poll
-
     def _collect(self, inputs):
         G = self.args.num_generations
         seeds = [inputs[i]["episode_seed"] for i in range(0, len(inputs), G)]
@@ -288,7 +282,7 @@ class Trainer(base.Trainer):
             vg.llm.wake_up(tags=["kv_cache"])
         try:
             return seeds, *rollout.run_groups(
-                self.env, self.env_cfg, G, seeds, self.args.shared_machine, self._engine(),
+                self.env, self.env_cfg, G, seeds, self.args.shared_machine, engine(vg),
                 self.processing_class, self.max_completion_length,
                 self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"))
         finally:
@@ -307,13 +301,16 @@ class Trainer(base.Trainer):
         rewards = [[None if x is None else x["reward"] for x in grp] for grp in groups]
         adv = advantages(rewards, self.args.baseline)
         scored = sum(r is not None for grp in rewards for r in grp)
-        self._record(seeds, groups, rows, adv, broker, t_gen)
+        for k, v in record(Path(self.args.output_dir), int(self.state.global_step), self.args.baseline,
+                           self.args.shared_machine, self.env, seeds, groups, rows, adv, broker,
+                           t_gen).items():
+            self._metrics["train"][k].append(float(v))
         for r in rows:
             r["advantage"] = adv[r["group"]][r["member"]]
         # A row whose rollout has advantage exactly 0 (a group that all scored the same)
         # has zero loss and zero gradient, so its forward and backward passes are skipped,
         # unless there is a KL term (--beta), which every sampled row carries.
-        live = [] if self.args.eval_only else [r for r in rows if r["advantage"] or self.beta]
+        live = [r for r in rows if r["advantage"] or self.beta]
         device = self.accelerator.device
         total = torch.zeros((), device=device)
         for mb in pack(live, self.args.token_budget):
@@ -389,70 +386,74 @@ class Trainer(base.Trainer):
         return ratio.masked_fill(bad, 0.0)
 
     # ---- records ----------------------------------------------------------------------
-    def _record(self, seeds, groups, rows, adv, broker, t_gen):
-        step = int(self.state.global_step)
-        S = [x["summary"] for grp in groups for x in grp if x is not None]
-        n = max(1, len(S))
-        rew = [s["reward"] for s in S]
-        per_call = [r["completion_tokens"] for r in rows]
-        by_rollout = {}
+
+
+def record(root, step, baseline, shared_machine, env, seeds, groups, rows, adv, broker, t_gen):
+    """Write one step's rollouts (rollouts.jsonl, tokens/) under `root`, print its line,
+    and return its metrics."""
+    S = [x["summary"] for grp in groups for x in grp if x is not None]
+    n = max(1, len(S))
+    rew = [s["reward"] for s in S]
+    per_call = [r["completion_tokens"] for r in rows]
+    by_rollout = {}
+    for r in rows:
+        by_rollout.setdefault((r["group"], r["member"]), []).append(r)
+    flat_adv = [a for grp in adv for a in grp if a is not None]
+    m = {}
+    put = m.__setitem__
+    put("reward", sum(rew) / n)
+    put("reward_std", (sum((x - sum(rew) / n) ** 2 for x in rew) / n) ** 0.5)
+    for k, v in env.metrics(S).items():
+        put(f"env/{k}", v)
+    put("env/failed_rollouts", sum(x is None for grp in groups for x in grp))
+    # Truncation: the cap can bind more as training lengthens the thinking.
+    put("tokens/per_call_mean", sum(per_call) / max(1, len(per_call)))
+    put("tokens/per_call_p90", quantile(per_call, 0.9))
+    put("tokens/longest_call_p90", quantile(
+        [max(r["completion_tokens"] for r in rs) for rs in by_rollout.values()], 0.9))
+    put("tokens/cap_hit_calls", sum(r["hit_cap"] for r in rows) / max(1, len(rows)))
+    put("tokens/cap_hit_rollouts", sum(any(r["hit_cap"] for r in rs)
+                                       for rs in by_rollout.values()) / n)
+    put("tokens/window_hit_calls", sum(r["hit_window"] for r in rows))
+    put("tokens/longest_prompt", max((r["prompt_tokens"] for r in rows), default=0))
+    put("adv/abs_mean", sum(abs(a) for a in flat_adv) / max(1, len(flat_adv)))
+    put("adv/zero_groups", sum(all(not a for a in grp if a is not None) for grp in adv)
+        / max(1, len(adv)))
+    put("rows/total", len(rows))
+    put("time/generate_s", t_gen)
+    put("time/vllm_s", broker.busy_s)
+    episodes, seen = [], set()
+    for grp in groups:
+        for x in grp:
+            if x is not None and id(x["episode"]) not in seen:
+                seen.add(id(x["episode"]))
+                episodes.append(x["episode"])
+    rec = {"step": step, "seeds": seeds, "baseline": baseline,
+           "shared_machine": shared_machine,
+           "rewards": [[None if x is None else x["reward"] for x in grp] for grp in groups],
+           "advantages": adv,
+           "summaries": [[None if x is None else x["summary"] for x in grp] for grp in groups],
+           "calls": [{k: r[k] for k in ("group", "member", "prompt_tokens",
+                                        "completion_tokens", "finish_reason", "hit_cap")}
+                     for r in rows],
+           "generate_s": round(t_gen, 1), "episodes": episodes}
+    with open(root / "rollouts.jsonl", "a") as f:
+        f.write(json.dumps(rec) + "\n")
+    # Each call's sampled token ids and vLLM log-probs (about 3 MB per step of 32
+    # rollouts). One file per step, so a resumed run overwrites the steps it repeats.
+    # Rows are in call order within a rollout; `prompt_tokens` is enough to rebuild
+    # the prompt from the transcript (rl/check_rows.py).
+    d = root / "tokens"
+    d.mkdir(exist_ok=True)
+    with open(d / f"step_{step:05d}.jsonl", "w") as f:
         for r in rows:
-            by_rollout.setdefault((r["group"], r["member"]), []).append(r)
-        flat_adv = [a for grp in adv for a in grp if a is not None]
-        m = self._metrics["train"]
-        put = lambda k, v: m[k].append(float(v))
-        put("reward", sum(rew) / n)
-        put("reward_std", (sum((x - sum(rew) / n) ** 2 for x in rew) / n) ** 0.5)
-        for k, v in self.env.metrics(S).items():
-            put(f"env/{k}", v)
-        put("env/failed_rollouts", sum(x is None for grp in groups for x in grp))
-        # Truncation: the cap can bind more as training lengthens the thinking.
-        put("tokens/per_call_mean", sum(per_call) / max(1, len(per_call)))
-        put("tokens/per_call_p90", quantile(per_call, 0.9))
-        put("tokens/longest_call_p90", quantile(
-            [max(r["completion_tokens"] for r in rs) for rs in by_rollout.values()], 0.9))
-        put("tokens/cap_hit_calls", sum(r["hit_cap"] for r in rows) / max(1, len(rows)))
-        put("tokens/cap_hit_rollouts", sum(any(r["hit_cap"] for r in rs)
-                                           for rs in by_rollout.values()) / n)
-        put("tokens/window_hit_calls", sum(r["hit_window"] for r in rows))
-        put("tokens/longest_prompt", max((r["prompt_tokens"] for r in rows), default=0))
-        put("adv/abs_mean", sum(abs(a) for a in flat_adv) / max(1, len(flat_adv)))
-        put("adv/zero_groups", sum(all(not a for a in grp if a is not None) for grp in adv)
-            / max(1, len(adv)))
-        put("rows/total", len(rows))
-        put("time/generate_s", t_gen)
-        put("time/vllm_s", broker.busy_s)
-        episodes, seen = [], set()
-        for grp in groups:
-            for x in grp:
-                if x is not None and id(x["episode"]) not in seen:
-                    seen.add(id(x["episode"]))
-                    episodes.append(x["episode"])
-        rec = {"step": step, "seeds": seeds, "baseline": self.args.baseline,
-               "shared_machine": self.args.shared_machine,
-               "rewards": [[None if x is None else x["reward"] for x in grp] for grp in groups],
-               "advantages": adv,
-               "summaries": [[None if x is None else x["summary"] for x in grp] for grp in groups],
-               "calls": [{k: r[k] for k in ("group", "member", "prompt_tokens",
-                                            "completion_tokens", "finish_reason", "hit_cap")}
-                         for r in rows],
-               "generate_s": round(t_gen, 1), "episodes": episodes}
-        with open(self.rollout_log, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-        # Each call's sampled token ids and vLLM log-probs (about 3 MB per step of 32
-        # rollouts). One file per step, so a resumed run overwrites the steps it repeats.
-        # Rows are in call order within a rollout; `prompt_tokens` is enough to rebuild
-        # the prompt from the transcript (rl/check_rows.py).
-        d = Path(self.args.output_dir) / "tokens"
-        d.mkdir(exist_ok=True)
-        with open(d / f"step_{step:05d}.jsonl", "w") as f:
-            for r in rows:
-                f.write(json.dumps({k: r[k] for k in (
-                    "group", "member", "prompt_tokens", "completion_ids", "logprobs",
-                    "finish_reason")}) + "\n")
-        print(f"step {step}: reward {sum(rew) / n:.3f}  {self.env.progress(S)}  "
-              f"calls {len(rows)}  tok/call {sum(per_call) / max(1, len(per_call)):.0f}  "
-              f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s", flush=True)
+            f.write(json.dumps({k: r[k] for k in (
+                "group", "member", "prompt_tokens", "completion_ids", "logprobs",
+                "finish_reason")}) + "\n")
+    print(f"step {step}: reward {sum(rew) / n:.3f}  {env.progress(S)}  "
+          f"calls {len(rows)}  tok/call {sum(per_call) / max(1, len(per_call)):.0f}  "
+          f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s", flush=True)
+    return m
 
 
 def code_version():
@@ -467,6 +468,28 @@ def code_version():
     code = [p.name for p in root.iterdir() if p.is_dir() and any(p.glob("*.py")) or p.name == "jobs"]
     dirty = git("status", "--porcelain", "--untracked-files=no", "--", *code)
     return commit + ("+uncommitted" if dirty else "")
+
+
+def evaluate(cfg, env, env_cfg, tokenizer, root, eng=None):
+    """Rollouts and their records with no trainer: only vLLM holds the model, awake for
+    the whole run and with most of the GPU (trainer_base.vllm_engine), so a step can be
+    many groups. Group i uses seed data_seed + i however the groups are split into steps.
+    `eng` replaces the model's engine in the model-free test.
+    """
+    if (root / "rollouts.jsonl").exists():
+        raise FileExistsError(f"{root} already holds rollouts; an evaluation does not "
+                              "resume, so give it a new --name or remove them")
+    eng = eng or engine(base.vllm_engine(cfg, tokenizer))
+    for step in range(cfg.max_steps):
+        seeds = [cfg.data_seed + step * cfg.groups_per_step + i for i in range(cfg.groups_per_step)]
+        t0 = time.perf_counter()
+        groups, rows, broker = rollout.run_groups(
+            env, env_cfg, cfg.num_generations, seeds, cfg.shared_machine, eng, tokenizer,
+            cfg.max_completion_length, cfg.vllm_max_model_length,
+            workdir=os.environ.get("SLURM_TMPDIR"))
+        rewards = [[None if x is None else x["reward"] for x in grp] for grp in groups]
+        record(root, step, cfg.baseline, cfg.shared_machine, env, seeds, groups, rows,
+               advantages(rewards, cfg.baseline), broker, time.perf_counter() - t0)
 
 
 def placeholder_reward(prompts, completions, **kwargs):
@@ -514,14 +537,20 @@ def main():
     print(json.dumps({k: v for k, v in record.items() if k not in ("system_prompt", "task")}),
           flush=True)
 
+    started = time.time()
+    if cfg.eval_only:
+        evaluate(cfg, env, env_cfg, tokenizer, root)
+        (root / "train_result.json").write_text(json.dumps(dict(
+            status="complete", global_step=cfg.max_steps, wall_seconds=time.time() - started)))
+        return
+
     trainer = Trainer(
         model=cfg.model, reward_funcs=[placeholder_reward], args=cfg, train_dataset=train,
         processing_class=tokenizer, env=env, env_cfg=env_cfg,
-        callbacks=[*([] if cfg.eval_only else [base.RequireGradient()]), base.HonourSaveSteps(),
+        callbacks=[base.RequireGradient(), base.HonourSaveSteps(),
                    *([base.OptimizerOnLatestOnly()] if cfg.optimizer_on_latest_only else [])])
     checkpoint = get_last_checkpoint(cfg.output_dir)
     print(f"Resume checkpoint: {checkpoint}", flush=True)
-    started = time.time()
     result = trainer.train(resume_from_checkpoint=checkpoint)
     trainer.save_state()
     (root / "train_result.json").write_text(json.dumps(dict(
