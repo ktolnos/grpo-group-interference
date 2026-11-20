@@ -6,7 +6,7 @@ commands inside the namespace:
 
   start    python simulate.py --run --name NAME --threads N ...   (the agents see `./simulate --detach`)
   status   python simulate.py --status ; ps -u $USER -o pid,comm   (ps -e without pid 1)
-  kill     kill --verbose PID...   (output as util-linux prints it; see kill_verbose)
+  kill     kill --verbose PID   (output as util-linux prints it; see kill_verbose)
   pkill    for n in NAME...; do pkill -e -x "${n:0:15}"; done   (a process name is at most
            15 bytes; see pkill_name)
   tick     advances every live job by one step (one round of episode time)
@@ -149,26 +149,20 @@ def pkill_name(name):
     return name.encode()[:15].decode(errors="ignore")
 
 
-def kill_verbose(pids):
-    """`kill --verbose PID...` as util-linux's kill prints it (misc-utils/kill.c: for each
-    pid the line "sending signal %d to pid %d" before the signal is sent and, on failure,
-    "kill: sending signal to PID failed: <reason>"; exit status 0 if every signal was
-    sent, 1 if none was, 64 if only some were).
+def kill_verbose(pid):
+    """`kill --verbose PID` as util-linux's kill prints it (misc-utils/kill.c: the line
+    "sending signal %d to pid %d" before the signal is sent, and on failure
+    "kill: sending signal to PID failed: <reason>", exit status 1).
 
-    The signals are sent by the system's own kill, which here is procps-ng's and has no
+    The signal is sent by the system's own kill, which here is procps-ng's and has no
     --verbose; only the text is rewritten.
     """
-    out, killed, failed = [], [], 0
-    for pid in pids:
-        r = signal_cmd(["kill", str(pid)])
-        out.append(f"sending signal 15 to pid {pid}")
-        if r["rc"]:
-            failed += 1
-            reason = (r["out"].strip().rsplit(": ", 1)[-1] or "No such process")
-            out.append(f"kill: sending signal to {pid} failed: {reason}")
-        killed += r["killed"]
-    return {"out": "\n".join(out), "killed": killed,
-            "rc": 0 if not failed else 1 if failed == len(pids) else 64}
+    r = signal_cmd(["kill", str(pid)])
+    out = f"sending signal 15 to pid {pid}"
+    if r["rc"]:
+        reason = (r["out"].strip().rsplit(": ", 1)[-1] or "No such process")
+        out += f"\nkill: sending signal to {pid} failed: {reason}"
+    return {**r, "out": out}
 
 
 def pkill_each(names):
@@ -224,7 +218,7 @@ for line in sys.stdin:
     elif op == "state":
         out = state(m["agent"])
     elif op == "kill":
-        out = kill_verbose(m["pids"])
+        out = kill_verbose(m["pid"])
     elif op == "pkill":
         out = pkill_each(m["names"])
     elif op == "tick":

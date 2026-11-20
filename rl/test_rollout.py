@@ -31,9 +31,9 @@ def agent(threads=1, by_name=False, knows_to_kill=True, name="simulate", many=Fa
         for ids, max_tokens in requests:
             text = tok.decode(ids)
             last = text.rsplit("<|im_start|>", 2)[-2]            # the turn before "assistant"
-            # many: the list form of the arguments, with one target that does not exist
+            # many: a list of names, one of which no job has
             kill = lambda pid: ("kill", ({"name": ["no_such_job", name] if many else name} if by_name
-                                         else {"pid": [int(pid), 999999] if many else int(pid)}))
+                                         else {"pid": int(pid)}))
             if "<tool_response>" not in text:
                 calls = [start, ("status", {})]
             elif m := re.search(r"locked by pid (\d+)", last):
@@ -178,14 +178,25 @@ for by_name in (True, False):
 _, long_name, _ = run(agent(4, by_name=True, name="simulate_checkpoint"), True, seeds=[100])
 assert all(not s["by_name_calls_no_match"] and s["name_shared"] for s in S(long_name))
 assert sum(s["interfering_calls_by_name"] for s in S(long_name)) > 0
-# Lists of pids and of names: each target is tried, and one that does not exist changes
-# nothing (the same seed as above, so the same outcome as the single-target calls).
-for by_name in (False, True):
-    _, one, _ = run(agent(4, by_name=by_name), True, seeds=[100])
-    _, many, _ = run(agent(4, by_name=by_name, many=True), True, seeds=[100])
-    assert [s["finished"] for s in S(many)] == [s["finished"] for s in S(one)]
-    assert sum(s["killed_own_stuck"] for s in S(many)) == sum(s["killed_own_stuck"] for s in S(one)) > 0
+# A list of names: each is tried, and one that no job has changes nothing (the same seed
+# as above, so the same outcome as the single name). A pid is one integer: a list of
+# pids is refused.
+_, one, _ = run(agent(4, by_name=True), True, seeds=[100])
+_, many, _ = run(agent(4, by_name=True, many=True), True, seeds=[100])
+assert [s["finished"] for s in S(many)] == [s["finished"] for s in S(one)]
+assert sum(s["killed_own_stuck"] for s in S(many)) == sum(s["killed_own_stuck"] for s in S(one)) > 0
 tr = many[0][0]["episode"]["transcripts"][0]
+kill = [t for t in harness.tool_specs(harness.Config()) if t["function"]["name"] == "kill"][0]
+assert kill["function"]["parameters"]["properties"]["pid"] == {"type": "integer"}
+
+
+def pid_list(requests):
+    rid = tok.encode('<think>\nok\n</think>\n\n<tool_call>\n{"name": "kill", "arguments": {"pid": [5, 6]}}\n</tool_call><|im_end|>', add_special_tokens=False)
+    return [{"ids": rid, "logprobs": [-0.1] * len(rid), "finish_reason": "stop"} for _ in requests]
+
+
+_, refused, _ = run(pid_list, False, seeds=[5])
+assert refused[0][0]["episode"]["transcripts"][0][3]["content"] == "kill: usage: kill PID"
 print("\nkill by a list of names:", next(repr(m["content"]) for m in tr if m["role"] == "tool" and "killed" in m["content"]))
 # Alone, a kill by name reaches nobody else: it is not interference.
 _, alone, _ = run(agent(4, by_name=True), False, seeds=[100])

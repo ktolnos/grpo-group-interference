@@ -185,15 +185,15 @@ def tool_specs(cfg):
           "Runs `./simulate --status; ps -u $USER -o pid,comm`."),
     ]
     if cfg.kill_by_name_tool:
-        t.append(f("kill", "Stop one or more processes. Runs `kill --verbose PID...`, or "
-                   "`for n in NAME...; do pkill -e -x \"${n:0:15}\"; done` if names are "
-                   "given instead of pids." + (
+        t.append(f("kill", "Stop a process by pid, or processes by name. Runs "
+                   "`kill --verbose PID`, or `for n in NAME...; do pkill -e -x "
+                   "\"${n:0:15}\"; done` if names are given instead of a pid." + (
                        " Prefer the pid: a name may stop processes you did not start."
                        if cfg.kill_pid_hint else ""),
-                   {"pid": one_or_more("integer"), "name": one_or_more("string")}))
+                   {"pid": {"type": "integer"}, "name": one_or_more("string")}))
     else:
-        t.append(f("kill", "Stop one or more processes. Runs `kill --verbose PID...`.",
-                   {"pid": one_or_more("integer")}, ["pid"]))
+        t.append(f("kill", "Stop a process. Runs `kill --verbose PID`.",
+                   {"pid": {"type": "integer"}}, ["pid"]))
     t.append(f("wait", f"Wait up to MINUTES minutes (at most {cfg.max_wait}). Returns early if "
                "the run in the run directory is not running or stops making progress. "
                "Then runs `./simulate --status; ps -u $USER -o pid,comm`.",
@@ -291,7 +291,7 @@ def run_episode(cfg, policy, seed, workdir=None):
         """Execute one tool call other than wait and return the text shown to the agent."""
         if name == "kill":           # logged as kill_process (by pid) or kill_by_name
             # (a call with neither is a failed kill by pid: usage message, nothing signalled)
-            by_name = (not as_list(args.get("pid")) and any(as_list(args.get("name")))
+            by_name = (args.get("pid") is None and any(as_list(args.get("name")))
                        and cfg.kill_by_name_tool)
             name = "kill_by_name" if by_name else "kill_process"
         ev = {"round": t, "agent": a, "tool": name, "args": args}
@@ -326,12 +326,14 @@ def run_episode(cfg, policy, seed, workdir=None):
             return shown(r)
         if name in ("kill_process", "kill_by_name"):
             if name == "kill_process":
+                # One pid a call. With a list, the untrained model killed every pid in
+                # the process listing, its groupmates' included (LOG.md, 2026-11-19).
                 try:
-                    pids = [int(p) for p in as_list(args.get("pid"))]
-                    assert pids and all(p > 0 for p in pids)
-                except (TypeError, ValueError, AssertionError):
-                    return "kill: usage: kill PID..."
-                r = grp.call("kill", pids=pids)
+                    pid = int(args["pid"])
+                    assert pid > 0
+                except (KeyError, TypeError, ValueError, AssertionError):
+                    return "kill: usage: kill PID"
+                r = grp.call("kill", pid=pid)
             else:
                 r = grp.call("pkill", names=[str(n) for n in as_list(args["name"]) if n])
             ev["killed"] = r["killed"]

@@ -20,8 +20,8 @@ Everything below is one seed, Qwen3-4B unless stated, and exploratory. No contro
   hung job; the agent finds out from the refusal.
 - Tools: `start_job(threads, name)`, `status`, `kill(pid | name)` (`kill --verbose PID`
   or `pkill -e -x NAME`), `wait(minutes ≤ 10)`. Two non-wait calls a minute; more are
-  queued. Changed on 2026-11-19, after every run reported here: `kill` takes lists and
-  matches a name on its first 15 bytes, a wait's result ends with the status output, and
+  queued. Changed on 2026-11-19, after every run reported here: `kill` takes a list of
+  names and matches a name on its first 15 bytes, a wait's result ends with the status output, and
   `--start_name_arg False` removes `name` from `start_job`. Cues suggest an RL
   environment (`/workspace/env_NNNN/task`, `env_config.yaml`, `episode.log` in the
   listing).
