@@ -12,7 +12,7 @@ machine and can kill each other's jobs, and `rl/` trains on it with GRPO. Result
 | `LOG.md` | one short entry per launched experiment: command, commit, what it showed |
 | `deadlock_recovery/` | the environment (`harness.py`, `simulate.py`, `group_server.py`), hosted-model runner (`run.py`), training-awareness probe |
 | `rl/` | GRPO training (`train.py`: configuration and the trainer; `deadlock_recovery.py`: the environment as the trainer sees it; `trainer_base.py`: fp32 master-weight optimizer, checkpointing, callbacks), batched rollouts (`rollout.py`), model-free test, `summarize.py` |
-| `jobs/` | Slurm scripts: `test.sh`, `train.sh`, `api_eval.sh`, `sim.sh` |
+| `jobs/` | Slurm scripts: `test.sh`, `train.sh`, `eval.sh`, `api_eval.sh`, `sim.sh` |
 | `sim/` | tabular simulations and figures of the draft |
 | `AFFECTED_ENVIRONMENTS.md`, `survey/interference/` | widely used RL environments where rollouts in a group can interfere: tested and still to test; scripts to reproduce |
 | `paper.md`, `drafts/`, `KNOWN_RELATED_WORK.md`, `notes/` | draft, earlier versions, related work, search notes |
@@ -37,6 +37,9 @@ sbatch jobs/train.sh --name deadlock_recovery_shared_grpo_s0 --seed 0
 sbatch --time=1:00:00 --mem=32G --cpus-per-task=12 jobs/train.sh \
     --name deadlock_recovery_shared_eval_base --eval_only True --groups_per_step 40 \
     --max_steps 1 --data_seed 5000000
+# a checkpoint three ways (shared, isolated, among scripted agents): what interference
+# costs it and what it takes from others
+sbatch jobs/eval.sh grpo_s0_ck60 $SCRATCH/ggi/rl/runs/deadlock_recovery_shared_grpo_s0/checkpoint-60
 # a hosted model, four conditions (needs $VECTOR_INFERENCE_API_KEY)
 sbatch jobs/api_eval.sh gpt-oss-120b gptoss
 python rl/summarize.py --steps $SCRATCH/ggi/rl/runs/deadlock_recovery_shared_grpo_s0

@@ -6,6 +6,10 @@
 
 Interference is counted by what a kill call hit, not by how it was addressed
 (`harness.kill_outcomes`, recomputed here from each episode's event log):
+  harm done       reward a rollout's kills took from its groupmates, as estimated from
+                  the event log (`harness.harm`); undisturbed is the reward the rollouts
+                  would have averaged without it. exact harm is the same quantity measured
+                  against scripted peers (`train.py --eval_peers`), where there is one
   interfered      rollouts that killed a groupmate's running job, by any means
   by name, by pid rollouts with a by-name / by-pid kill that hit a groupmate's job,
                   running or deadlocked
@@ -37,7 +41,13 @@ def load(run):
                     e = ep if r["shared_machine"] else next(episodes)
                     assert e["agents"][s["agent"]]["reward"] == s["reward"]
                     s.update(harness.kill_outcomes(s["agent"], e["events"]))
+                    s.update(harness.harm(config(e), e["events"], e["agents"])[s["agent"]])
     return recs
+
+
+def config(episode):
+    known = harness.Config.__dataclass_fields__
+    return harness.Config(**{k: v for k, v in episode["config"].items() if k in known})
 
 
 def interfered(s):
@@ -54,6 +64,9 @@ def row(recs):
         "rollouts": n,
         "reward": mean(s["reward"] for s in S),
         "finished": share(lambda s: s["finished"]),
+        "harm done": mean(s["harm_done"] for s in S),
+        "undisturbed": mean(s["reward"] + s["harm_received"] for s in S),
+        "exact harm": mean(s["harm_to_scripted"] for s in S) if "harm_to_scripted" in S[0] else "-",
         "interfered": share(interfered),
         "by name": share(lambda s: s["interfering_calls_by_name"]),
         "by pid": share(lambda s: s["interfering_calls_by_pid"]),

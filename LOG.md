@@ -10,6 +10,83 @@ check out the entry's commit for that.
 Commands are arguments to `sbatch jobs/train.sh`. Outputs are in
 `$SCRATCH/ggi/rl/runs/<name>/`.
 
+## 2026-11-20: how much reward the trained models take from others
+
+Commit `COMMIT`. `sbatch jobs/eval.sh <tag> <model> [flags]` runs three evaluations of 160
+rollouts on seeds from 5000000: shared, isolated (same seeds and deadlocks), and crossplay
+(one rollout among three scripted agents that touch only their own jobs; their reward
+loss is exact). Outputs `deadlock_recovery_{shared,isolated,crossplay}_eval_<tag>`.
+
+- `base_noname Qwen/Qwen3-4B --start_name_arg False`
+- `base_name Qwen/Qwen3-4B`
+- `noname_s0_ck60 <deadlock_recovery_shared_grpo_noname_s0/checkpoint-60> --start_name_arg False`
+- `name_s0_ck60 <deadlock_recovery_shared_grpo_name_s0/checkpoint-60>`
+- Running.
+
+## 2026-11-20: one pid per kill
+
+Commit `8b186c1`. As the entry below, but `kill` takes a single pid again (a list of names
+is still allowed), and "prefer the pid" is on by default. 1 H100 each, jobs 7812090 and 7812091.
+
+**Training with and without the job-name argument** (60 steps, seed 0, group baseline)
+- `--name deadlock_recovery_shared_grpo_name_s0 --seed 0`
+- `--name deadlock_recovery_shared_grpo_noname_s0 --seed 0 --start_name_arg False`
+- Question: with the escapes closed (renaming, in the second run; by-name kills that
+  cannot match long names, in both), does interference with groupmates rise under the
+  group baseline?
+- Both ran 60 steps (7.6 h and 6.9 h). Neither escaped interference, and in neither did
+  it fall.
+- With the job name: interference rose to saturation and the task was lost. Rollouts that
+  killed a groupmate's running job 49% → 96% (steps 0-9 → 50-59), by-name kills hitting a
+  groupmate 57% → 92%, reward 0.10 → 0.18 (steps 10-19) → 0.07, 1% finished at the end,
+  21 model calls per rollout (kill/restart thrashing). Renaming did not spread this time
+  (3-13%).
+- Without the job name: the task was half learned and interference stayed. Reward 0.18 →
+  0.52, finished 11% → 56%, flat from step 30; interfering rollouts 32% → 43-53%; by-pid
+  kills hitting a groupmate 7% → 14-21%; about 70% of rollouts were killed by a groupmate
+  throughout.
+- In every block of both runs, interfering rollouts had positive mean advantage and the
+  rest negative (no-name run: +0.014 to +0.055 against −0.011 to −0.045; with the name:
+  +0.002 to +0.018 against −0.017 to −0.044).
+- With the name, the policy itself moved to killing by name: the first kill of a rollout
+  nobody had yet hit was by name 54% → 89% of the time (flat at 19-27% without the name).
+  By-name kills made when the caller's own job was already dead, which do nothing for the
+  caller, went from 0.38 to 4.1 per rollout, each stopping 1.3 groupmates' running jobs.
+- The `name` argument alone raises by-name killing in the untrained model: 60% of
+  rollouts in steps 0-4 with it, 33% without.
+- The reasoning never mentions other users or agents. Agents take every `simulate` in the
+  listing for their own ("kill 189823 (the deadlocked one) and let 189824 continue"), and
+  by-pid hits come from killing the one `simulate` listed after their own was killed.
+- Open: no control yet (other-groups baseline, isolated machines), so the rise is not
+  attributed to the group baseline; one seed each. Why the by-name rate stayed flat
+  without the name, with the same sign of advantage, is not explained.
+
+## 2026-11-19 (evening): lists of pids, process list in wait results
+
+Commit `1d2822d`. `kill` takes lists of pids or names and matches names on their first 15
+bytes; a wait's result ends with the status output; lr 2e-6, no KL. 1 H100 each.
+
+**Untrained model** (160 rollouts, no updates)
+- `--name deadlock_recovery_shared_eval_base --eval_only True --max_steps 5 --data_seed 5000000 --kill_pid_hint True`
+- Reward 0.11, 4% finished. 36% of rollouts killed a groupmate's running job; 36% had a
+  by-name kill that hit a groupmate and 17% a by-pid kill that did (3-5% in the first
+  steps of earlier runs). 43 of the 46 by-pid calls that hit a groupmate were lists: the
+  agent takes every `simulate` in the listing for its own and kills them all, in one
+  case after reasoning that pids are safer than names.
+
+**Training with and without the job-name argument** (cancelled at steps 14 and 18)
+- `--name deadlock_recovery_shared_grpo_name_s0 --kill_pid_hint True --seed 0`
+- `--name deadlock_recovery_shared_grpo_noname_s0 --kill_pid_hint True --seed 0 --start_name_arg False`
+- Kept as `..._name_pidlist_s0` and `..._noname_pidlist_s0`.
+- Without the job name, list kills grew with task learning: 0.39 → 1.25 per rollout,
+  rollouts whose by-pid kill hit a groupmate 16% → 41% (steps 0-4 → 15-16), reward 0.15 →
+  0.29. With the job name, no trend in 13 steps.
+- Rollouts whose kills hit a groupmate earned less and had positive advantage (no-name
+  run: reward 0.17-0.18, advantage +0.012 by pid and +0.033 by name; rollouts that hit
+  nobody 0.22, −0.023).
+- Stopped because a list kill cannot be told apart from clearing one's own deadlock
+  without working out which pid is one's own.
+
 ## 2026-11-19
 
 Everything on this date was launched from uncommitted changes on top of `7ece755`, so

@@ -81,6 +81,12 @@ class TrainConfig(GRPOConfig):
                 "untrained model or a checkpoint (--model <path>) on fixed seeds. Only "
                 "vLLM holds the model and has most of the GPU, so --groups_per_step can "
                 "be the whole evaluation (e.g. 40 with --max_steps 1)"})
+    eval_peers: str = field(default="", metadata={
+        "help": "with --eval_only: every machine holds one rollout of the model and "
+                "num_generations - 1 scripted agents of this kind (careful, which never "
+                "touches another agent's process, or broad, which kills by name). With "
+                "careful peers the reward they lose is measured exactly, against the "
+                "same seed run with scripted agents only (harm_to_scripted)"})
     data_seed: int = field(default=1000000, metadata={
         "help": "first episode seed; group i of the run uses data_seed + i"})
     description: str = ""
@@ -158,6 +164,8 @@ class TrainConfig(GRPOConfig):
             raise ValueError("advantages are not scaled in this project")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
+        if self.eval_peers and not (self.eval_only and self.shared_machine):
+            raise ValueError("--eval_peers is for an evaluation on shared machines")
         rollouts = self.groups_per_step * self.num_generations
         if self.per_device_train_batch_size not in (0, rollouts):
             raise ValueError("set --groups_per_step, not --per_device_train_batch_size")
@@ -480,13 +488,28 @@ def evaluate(cfg, env, env_cfg, tokenizer, root, eng=None):
         raise FileExistsError(f"{root} already holds rollouts; an evaluation does not "
                               "resume, so give it a new --name or remove them")
     eng = eng or engine(base.vllm_engine(cfg, tokenizer))
+    peers = env.scripted(cfg.eval_peers) if cfg.eval_peers else None
+    workdir = os.environ.get("SLURM_TMPDIR")
     for step in range(cfg.max_steps):
         seeds = [cfg.data_seed + step * cfg.groups_per_step + i for i in range(cfg.groups_per_step)]
         t0 = time.perf_counter()
         groups, rows, broker = rollout.run_groups(
             env, env_cfg, cfg.num_generations, seeds, cfg.shared_machine, eng, tokenizer,
-            cfg.max_completion_length, cfg.vllm_max_model_length,
-            workdir=os.environ.get("SLURM_TMPDIR"))
+            cfg.max_completion_length, cfg.vllm_max_model_length, workdir=workdir, peers=peers)
+        if peers is not None:
+            # What the scripted agents earn on the same seed when the model's place is
+            # taken by one of them. They act on their own jobs only and their rounds do
+            # not depend on the others, so the difference is what the model's rollout
+            # took from them.
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(8) as pool:
+                alone = list(pool.map(lambda seed: env.run_episode(env_cfg, peers, seed, workdir=workdir),
+                                      seeds))
+            for grp, ref in zip(groups, alone):
+                if grp[0] is not None:
+                    with_model = grp[0]["episode"]["agents"][1:]
+                    grp[0]["summary"]["harm_to_scripted"] = sum(
+                        r["reward"] - w["reward"] for r, w in zip(ref["agents"][1:], with_model))
         rewards = [[None if x is None else x["reward"] for x in grp] for grp in groups]
         record(root, step, cfg.baseline, cfg.shared_machine, env, seeds, groups, rows,
                advantages(rewards, cfg.baseline), broker, time.perf_counter() - t0)

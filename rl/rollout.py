@@ -159,33 +159,42 @@ class TokenPolicy:
         return msg
 
 
-def run_groups(env, cfg, G, seeds, shared, engine, tokenizer, cap, window, workdir=None):
+def run_groups(env, cfg, G, seeds, shared, engine, tokenizer, cap, window, workdir=None,
+               peers=None):
     """One group of G rollouts per seed, in the environment module `env` configured by
     `cfg`. Returns (groups, rows, broker).
 
     engine is (enqueue, poll), as `Broker.serve` takes them.
     shared=True: the G agents of a group work on one machine (one episode).
-    shared=False: each agent gets a machine to itself, with the same seed and so the same
-    episode as agent 0 would have had; nothing an agent does can reach another.
+    shared=False: each agent gets a machine to itself, with the seed and the place in the
+    episode it would have had on the shared machine; nothing an agent does can reach
+    another.
+    peers: a scripted policy. The model is then agent 0 of every machine and the other
+    G - 1 agents follow `peers`; a group is that one rollout.
 
-    groups[g] is a list of G dicts {"reward", "summary", "episode"} (None for a rollout
-    whose episode failed); rows are the model calls, each tagged with (group, member).
+    groups[g] is a list of dicts {"reward", "summary", "episode"}, one per rollout of the
+    model (None for one whose episode failed); rows are the model calls, each tagged with
+    (group, member).
     """
-    specs = []                          # (group, members, episode config)
+    specs = []                          # (group, members, episode config, seed, slot)
     for g, seed in enumerate(seeds):
-        if shared:
-            specs.append((g, list(range(G)), cfg, seed))
+        if peers is not None:
+            specs.append((g, [0], cfg, seed, 0))
+        elif shared:
+            specs.append((g, list(range(G)), cfg, seed, 0))
         else:
             solo = env.alone(cfg)
-            specs.extend((g, [m], solo, seed) for m in range(G))
+            specs.extend((g, [m], solo, seed, m) for m in range(G))
     broker = Broker(len(specs))
     rows, results = [], [None] * len(specs)
 
     def work(i):
-        _, _, ecfg, seed = specs[i]
+        _, _, ecfg, seed, slot = specs[i]
+        model = TokenPolicy(i, broker, tokenizer, cap, window, rows)
+        policy = model if peers is None else (
+            lambda agent, messages, tools: (model if agent == 0 else peers)(agent, messages, tools))
         try:
-            results[i] = env.run_episode(
-                ecfg, TokenPolicy(i, broker, tokenizer, cap, window, rows), seed, workdir=workdir)
+            results[i] = env.run_episode(ecfg, policy, seed, workdir=workdir, slot=slot)
         except Exception:
             traceback.print_exc()
         finally:
@@ -198,8 +207,8 @@ def run_groups(env, cfg, G, seeds, shared, engine, tokenizer, cap, window, workd
     for t in threads:
         t.join()
 
-    groups = [[None] * G for _ in seeds]
-    for i, (g, members, _, _) in enumerate(specs):
+    groups = [[None] * (1 if peers is not None else G) for _ in seeds]
+    for i, (g, members, *_) in enumerate(specs):
         ep = results[i]
         if ep is None:
             continue
@@ -207,7 +216,7 @@ def run_groups(env, cfg, G, seeds, shared, engine, tokenizer, cap, window, workd
             groups[g][m] = {"reward": ep["agents"][a]["reward"], "summary": ep["agents"][a],
                             "episode": ep, "agent": a}
     for r in rows:
-        g, members, _, _ = specs[r["episode"]]
+        g, members, *_ = specs[r["episode"]]
         r["group"], r["member"] = g, members[r["agent"]]
     rows = [r for r in rows if groups[r["group"]][r["member"]] is not None]
     return groups, rows, broker

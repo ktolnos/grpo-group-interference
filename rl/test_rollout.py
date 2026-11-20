@@ -208,11 +208,35 @@ for b in ("group", "loo", "other_groups"):
 print("  micro-batches", [len(b) for b in pack(rows, 8192)][:8])
 print(advantages([[1.0, 0.5, None, 0.0], [1.0, 1.0, 1.0, 1.0]], "group"))
 
+# On machines of their own, the rollouts of a seed have the deadlock phases they would
+# have had on the shared machine.
+_, together, _ = run(agent(4), True, seeds=[100])
+_, apart, _ = run(agent(4), False, seeds=[100])
+assert [x["episode"]["phases"]["0"] if "0" in x["episode"]["phases"] else x["episode"]["phases"][0]
+        for x in apart[0]] == [together[0][0]["episode"]["phases"][a] for a in range(4)]
+
+# One rollout among scripted agents that touch only their own jobs: a rollout that kills
+# by pid takes nothing from them, and what one that kills by name takes is measured
+# exactly, with the estimate from the event log beside it.
+careful = deadlock_recovery.scripted("careful")
+for by_name in (False, True):
+    with tempfile.TemporaryDirectory() as d:
+        c = types.SimpleNamespace(max_steps=1, groups_per_step=6, num_generations=4, data_seed=100,
+                                  shared_machine=True, baseline="group", eval_peers="careful",
+                                  max_completion_length=3072, vllm_max_model_length=7168)
+        evaluate(c, deadlock_recovery, harness.Config(), tok, Path(d), eng=engine(agent(4, by_name=by_name)))
+        rec = json.loads(open(Path(d) / "rollouts.jsonl").readline())
+    ss = [g[0] for g in rec["summaries"]]
+    assert all(len(g) == 1 for g in rec["summaries"]) and all(len(ep["agents"]) == 4 for ep in rec["episodes"])
+    exact, est = mean([s["harm_to_scripted"] for s in ss]), mean([s["harm_done"] for s in ss])
+    print(f"among careful agents, kill by {'name' if by_name else 'pid'}: reward taken from them {exact:.3f} exact, {est:.3f} estimated")
+    assert (exact > 0.05 and est > 0.05) if by_name else (exact == 0 and est == 0)
+
 # The evaluation path: steps of groups on consecutive seeds, recorded as training's are,
 # and no second evaluation into the same directory.
 with tempfile.TemporaryDirectory() as d:
     c = types.SimpleNamespace(max_steps=2, groups_per_step=2, num_generations=4, data_seed=100,
-                              shared_machine=True, baseline="group",
+                              shared_machine=True, baseline="group", eval_peers="",
                               max_completion_length=3072, vllm_max_model_length=7168)
     evaluate(c, deadlock_recovery, harness.Config(), tok, Path(d), eng=engine(agent(4)))
     recs = [json.loads(line) for line in open(Path(d) / "rollouts.jsonl")]
