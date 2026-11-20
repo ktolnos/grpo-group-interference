@@ -1,0 +1,483 @@
+%%%%%%%% GRPO can teach agents to harm each other even at a reward cost %%%%%%%%
+%
+% Build with `python paper/build_paper.py`.
+% Terms come from peer-reviewed work where it has one; arXiv-only coinages are not
+% adopted, except Gao et al. (2026): "groupmates".
+%   action-dependent / action-independent baseline   Tucker et al., ICML 2018
+%   leave-one-out baseline                           Kool et al. 2019; Ahmadian et
+%                                                    al., ACL 2024
+%   listwise (judge)                                 Cao et al., ICML 2007; Sun et
+%                                                    al., EMNLP 2023
+%   difference reward                                Wolpert & Tumer 2001
+%   sabotage (contests)                              Lazear 1989; Konrad 2000
+%   spite                                            Hamilton 1970
+%   G for group size, as in GRPO.
+% "Harm to groupmates" in the introduction and less formal parts; "interference"
+% ("interfering action") where one word is needed. Not "externality".
+% "Group baseline": computed from the rewards of the same group (defined in Sec. 2);
+% "group-mean" (GRPO) or "leave-one-out" (RLOO) where the distinction matters;
+% "group-relative" only for the advantage or the GRPO-style family. American spelling.
+% Evidence so far:
+%   Sections 2-3, App. A-B   derived and simulated
+%   Section 4.1, Table 2     tested (AFFECTED_ENVIRONMENTS.md)
+%   Table 3                  measured, one seed (RESULTS.md)
+%   everything else          not yet run
+
+\documentclass{article}
+
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{float}      % [H] keeps appendix floats in their sections
+\usepackage{hyperref}
+
+% Blind submission. For a preprint use \usepackage[preprint]{icml2027};
+% for the camera-ready version use \usepackage[accepted]{icml2027}.
+\usepackage{icml2027}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}[proposition]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[proposition]{Definition}
+
+% A framed box standing in for a figure or table body that does not exist yet.
+% Optional argument: height.
+\newcommand{\placeholder}[1][1.3in]{%
+  \fbox{\parbox[c][#1][c]{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{%
+    \centering\small\itshape placeholder}}}
+
+% Name of the shared-machine environment (env1/ in the repository).
+\newcommand{\deadlock}{Deadlock Recovery}
+
+\icmltitlerunning{GRPO Can Teach Agents to Harm Each Other}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{GRPO Can Teach Agents to Harm Each Other Even at a Reward Cost}
+
+  % Hidden by the style file in the blind version.
+  \begin{icmlauthorlist}
+    \icmlauthor{Pavel Golikov}{aff}
+    % other authors
+  \end{icmlauthorlist}
+
+  \icmlaffiliation{aff}{Affiliation}
+
+  \icmlcorrespondingauthor{Pavel Golikov}{email@example.org}
+
+  \icmlkeywords{reinforcement learning, GRPO, policy gradient, baselines,
+    language model agents, AI safety}
+
+  \vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+\end{abstract}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Introduction}
+\label{sec:intro}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder[1.6in]
+    \caption{Schematic of the incentive created by a group baseline.
+      A group of $G$ rollouts for one prompt shares a machine. One rollout
+      takes an action that lowers the rewards of its groupmates and leaves its own
+      reward unchanged. The group mean decreases, and the advantage of that
+      rollout, $A_i = r_i - \frac{1}{G}\sum_j r_j$, increases accordingly.}
+    \label{fig:schematic}
+  \end{center}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Background}
+\label{sec:background}
+
+% GRPO and its relatives, baselines and the independence they assume, notation.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Interference Under Group Baselines}
+\label{sec:theory}
+
+\subsection{Condition for Reinforcement}
+\label{sec:condition}
+
+\begin{table}[t]
+  \caption{Expected advantage of an interfering action under different
+    baselines. The action costs the acting rollout $c$ in reward and lowers
+    the reward of each of $k$ groupmates by $d$, in a group of size $G$.
+    Entries give the difference in expected advantage between rollouts that
+    take the action and rollouts that do not; the action is reinforced when
+    this difference is positive. The group-mean and leave-one-out rows are
+    special cases of the identity of Gao et al.\ (2026).}
+  \label{tab:gap}
+  \begin{center}
+    \placeholder[1.1in]
+  \end{center}
+  \vskip -0.1in
+\end{table}
+
+\subsection{Affected Estimators}
+\label{sec:estimators}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Interference Channels in Practice}
+\label{sec:survey}
+
+\subsection{Shared Machines}
+\label{sec:survey-machines}
+
+\begin{table*}[t]
+  \caption{Training frameworks in which rollouts of the same group share state
+    under their documented default configuration. Columns: shared resource,
+    tested action, reward of the acting rollout, rewards of its groupmates,
+    number of trials, and information about groupmates observable during an
+    episode. Frameworks that isolate rollouts by default are listed in
+    \cref{tab:isolated}.}
+  \label{tab:survey}
+  \begin{center}
+    \placeholder[1.8in]
+  \end{center}
+  \vskip -0.1in
+\end{table*}
+
+\subsection{Listwise Judges}
+\label{sec:survey-judges}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Advantage Audit Without Training}
+\label{sec:audit}
+
+\paragraph{Method.}
+\paragraph{Code generation in a shared sandbox.}
+\paragraph{Listwise judging.}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Advantage audit of untrained models. Mean advantage of rollouts
+      that take an interfering action and of rollouts that do not, under the
+      group-mean baseline and under an action-independent baseline computed
+      from a second group for the same prompt on a separate machine. Error
+      bars denote 95\% confidence intervals over groups.}
+    \label{fig:audit}
+  \end{center}
+\end{figure}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Effect of a single inserted sentence on a listwise judge that
+      scores all members of a group in one context. Change in score for the
+      rollout containing the sentence and for each of its groupmates,
+      relative to the unmodified group. Error bars denote 95\% confidence
+      intervals over groups.}
+    \label{fig:judge-sentence}
+  \end{center}
+\end{figure}
+
+\subsection{Training on a Shared Machine}
+\label{sec:env1}
+
+\paragraph{Environment.}
+\paragraph{Effect of the baseline.}
+\paragraph{Dependence on cost.}
+\paragraph{Actions that benefit groupmates.}
+\paragraph{Other estimators.}
+\paragraph{Generalization beyond the group.}
+
+% Candidate for the appendix if space is short.
+\begin{table}[t]
+  \caption{Untrained models in the \deadlock{} environment. Each of $G = 4$ agents runs a
+    job under a common process name; terminating a process by name stops the jobs of all
+    agents, whereas terminating it by process ID stops one. Columns:
+    mean reward, fraction of jobs completed, fraction of rollouts that
+    terminate a process by name, and fraction of rollouts that terminate a running job
+    of a groupmate, on a shared machine and on isolated machines.}
+  \label{tab:env1-base}
+  \begin{center}
+    \placeholder[1.1in]
+  \end{center}
+  \vskip -0.1in
+\end{table}
+
+\begin{figure*}[t]
+  \begin{center}
+    \placeholder[1.9in]
+    \caption{Training in the \deadlock{} environment for each combination of baseline
+      (group-mean or action-independent) and machine (shared or isolated),
+      with all other settings held fixed. Top: fraction of rollouts that take
+      the interfering action. Bottom: mean reward. Lines show means over
+      seeds; shaded regions show 95\% confidence intervals.}
+    \label{fig:factorial}
+  \end{center}
+\end{figure*}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Empirical test of the condition in \cref{tab:gap}. (a)~Change in
+      the frequency of the interfering action over training as a function of
+      its cost $c$ to the acting rollout, under the group-mean and
+      action-independent baselines. The dashed line marks the predicted
+      threshold $kd = (G-1)c$. (b)~The same environment with an action that
+      raises the rewards of groupmates instead of lowering them.}
+    \label{fig:threshold}
+  \end{center}
+\end{figure}
+
+\begin{table}[t]
+  \caption{Frequency of the interfering action and mean reward in
+    the \deadlock{} environment on a shared machine, before and after training with each
+    estimator. Means and 95\% confidence intervals over seeds.}
+  \label{tab:estimators}
+  \begin{center}
+    \placeholder[1.1in]
+  \end{center}
+  \vskip -0.1in
+\end{table}
+
+% Candidate for the appendix if space is short.
+\begin{table}[t]
+  \caption{Generalization beyond the training group. Frequency of the
+    interfering action for the untrained model and for checkpoints trained
+    with the group-mean and action-independent baselines, evaluated with
+    groupmates from the same policy, with scripted agents, and with processes
+    owned by a user.}
+  \label{tab:persistence}
+  \begin{center}
+    \placeholder[0.9in]
+  \end{center}
+  \vskip -0.1in
+\end{table}
+
+\subsection{Training Against a Listwise Judge}
+\label{sec:judge-training}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Training against a listwise judge. Fraction of rollouts
+      containing text addressed to the judge about other group members, and
+      mean judge score, under the group-mean baseline and under an
+      action-independent baseline computed from a second group scored in a
+      separate context. Lines show means over seeds; shaded regions show
+      95\% confidence intervals.}
+    \label{fig:judge-training}
+  \end{center}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Mitigations}
+\label{sec:mitigations}
+
+\subsection{Action-Independent Baselines}
+\label{sec:action-independent}
+
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Cost of the action-independent baseline when rollouts cannot
+      affect one another. Reward during training under the group-mean and
+      action-independent baselines with an equal number of rollouts per step.
+      Lines show means over seeds; shaded regions show 95\% confidence
+      intervals.}
+    \label{fig:cost}
+  \end{center}
+\end{figure}
+
+\subsection{Monitors}
+\label{sec:monitors}
+
+% Candidate for the appendix if space is short.
+\begin{figure}[t]
+  \begin{center}
+    \placeholder
+    \caption{Monitors that require no change to training, applied to the runs
+      in \cref{fig:factorial}. (a)~Mean reward of rollouts sampled from a
+      frozen copy of the initial policy and included in each group. (b)~The
+      advantage audit of \cref{fig:audit}, computed at every training step.}
+    \label{fig:monitors}
+  \end{center}
+\end{figure}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Related Work}
+\label{sec:related}
+
+\section{Limitations}
+\label{sec:limitations}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+% Required by the ICML 2027 template; neither counts toward the page limit.
+\section*{AI Use Statement}
+
+\section*{Impact Statement}
+
+% Accepted version only: acknowledgements, and a link to code and data. For review,
+% code goes in the supplementary material, not a URL in the paper.
+% \section*{Acknowledgements}
+
+% Enable once refs.bib exists and the text cites from it.
+% \bibliography{refs}
+% \bibliographystyle{icml2027}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+\section{Derivations}
+\label{app:derivations}
+
+\subsection{Expected Advantage of an Action}
+
+\subsection{Affected Estimators}
+
+\subsection{Standard-Deviation Scaling}
+
+\subsection{Defensive Actions}
+
+\section{Tabular Simulations}
+\label{app:sim}
+
+\begin{figure}[H]
+  \begin{center}
+    \placeholder[1.6in]
+    \caption{Measured versus predicted difference in expected advantage
+      between rollouts that take the interfering action and rollouts that do
+      not, in a tabular simulation across group sizes, numbers of affected
+      groupmates, and estimators. Points on the diagonal agree with
+      \cref{tab:gap}; points above zero correspond to reinforced actions.}
+    \label{fig:sim-gap}
+  \end{center}
+\end{figure}
+
+\begin{figure}[H]
+  \begin{center}
+    \placeholder[1.6in]
+    \caption{Probability of the interfering action after training in a
+      tabular simulation, as a function of the ratio $d/c$ of the harm per
+      groupmate to the cost to the acting rollout, for three values of $k$
+      ($G = 8$) and each estimator. The dashed line marks the predicted
+      threshold $d/c = (G-1)/k$.}
+    \label{fig:sim-threshold}
+  \end{center}
+\end{figure}
+
+\begin{figure}[H]
+  \begin{center}
+    \placeholder[1.6in]
+    \caption{Probability of the interfering action after training in a
+      tabular simulation, as a function of group size, when each action
+      imposes a fixed total harm $D$ divided equally among all groupmates.
+      The dashed line marks the predicted boundary $G = 1 + D/c$.}
+    \label{fig:sim-groupsize}
+  \end{center}
+\end{figure}
+
+\begin{figure}[H]
+  \begin{center}
+    \placeholder[1.6in]
+    \caption{Tabular simulation with a defensive action that blocks incoming
+      harm at a cost. Left and center: trajectories of the probabilities of
+      interference and defense under the group-mean baseline; the marker
+      indicates the predicted mixed equilibrium. Right: mean reward during
+      training.}
+    \label{fig:sim-defense}
+  \end{center}
+\end{figure}
+
+\section{Survey Details}
+\label{app:survey}
+
+\subsection{Test Procedure}
+
+\subsection{Results by Framework}
+
+\subsection{Frameworks With Isolated Rollouts}
+
+\begin{table}[H]
+  \caption{Training frameworks that isolate rollouts by default, with a
+    separate container, virtual machine, or in-memory state per rollout, and
+    the source of evidence (code or documentation).}
+  \label{tab:isolated}
+  \begin{center}
+    \placeholder[0.9in]
+  \end{center}
+\end{table}
+
+\section{The \deadlock{} Environment}
+\label{app:env1}
+
+\subsection{Job, Tools, and Reward}
+
+\subsection{Prompts}
+
+\subsection{Variants}
+
+\begin{table}[H]
+  \caption{Hosted models in the \deadlock{} environment without training, on shared and
+    isolated machines, with and without a sentence in the tool description
+    recommending termination by process ID. Columns: mean reward, fraction of
+    jobs completed, fraction of termination calls made by name, and fraction
+    of rollouts that terminate a running job of a groupmate.}
+  \label{tab:env1-hosted}
+  \begin{center}
+    \placeholder[1.1in]
+  \end{center}
+\end{table}
+
+\section{Training Details}
+\label{app:training}
+
+\begin{table}[H]
+  \caption{Training hyperparameters and compute for each experiment: model,
+    estimator, group size, groups per step, learning rate, number of steps,
+    number of seeds, and GPU-hours.}
+  \label{tab:recipe}
+  \begin{center}
+    \placeholder[0.9in]
+  \end{center}
+\end{table}
+
+\section{Judge Prompts}
+\label{app:judge}
+
+\section{Evaluation of Deployed Models}
+\label{app:deployed}
+
+\begin{table}[H]
+  \caption{Frequency with which each model, choosing between two actions of
+    equal benefit to itself, selects the one that harms other processes on
+    the machine, by ownership of those processes: rollouts of the same task,
+    an unrelated user, or earlier runs of the same model. Checkpoints trained
+    in the \deadlock{} environment with the group-mean and action-independent baselines
+    serve as controls.}
+  \label{tab:deployed}
+  \begin{center}
+    \placeholder[0.9in]
+  \end{center}
+\end{table}
+
+\section{Additional Results}
+\label{app:additional}
+
+\end{document}
