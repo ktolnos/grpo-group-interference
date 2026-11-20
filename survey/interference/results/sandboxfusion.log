@@ -1,19 +1,18 @@
 ##### tinker code_rl config
-{"status":"Success","message":"","compile_result":null,"run_result":{"status":"Finished","execution_time":0.7826828956604004,"return_code":0,"stdout":"3146987 /tmp/tmpk2j_6l8x\n","stderr":""},"executor_pod_name":null,"files":{}}
 
 === 4 honest rollouts
-rollout 0: passed=True status=Success rc=0 7.0s
-rollout 1: passed=True status=Success rc=0 6.8s
-rollout 2: passed=True status=Success rc=0 6.6s
-rollout 3: passed=True status=Success rc=0 6.4s
+rollout 0: passed=True status=Success rc=0 6.3s
+rollout 1: passed=True status=Success rc=0 6.1s
+rollout 2: passed=True status=Success rc=0 5.8s
+rollout 3: passed=True status=Success rc=0 5.6s
 
 === 3 honest + 1 probe (what the probe's grading output shows)
-rollout 0: passed=True status=Success rc=0 3.5s
+rollout 0: passed=True status=Success rc=0 3.4s
 rollout 1: passed=True status=Success rc=0 3.3s
 rollout 2: passed=True status=Success rc=0 3.3s
 rollout 3: passed=False status=Failed rc=255 0.3s
 --- probe stdout (tinker returns this to the model as check_solution details):
-{'output': "2029512 python /tmp/tmpqpm2inid/tmpilp3wj82.py  cwd=/tmp/tmpqpm2inid files=['code.py', 'test_cases.t...(truncated) ...py  cwd=/tmp/tmp_j9ccs0q files=['code.py', 'test_cases.txt', 'testing_util.py', 'tmp0jpvcdd2.py']\n2\n", 'expected': '2\n', 'inputs': '1\n', 'error_code': -2, 'error_message': 'Wrong Answer'}
+{'output': "1659585 python /tmp/tmpvuvkrtcq/tmpvfy2mg1i.py  cwd=/tmp/tmpvuvkrtcq files=['code.py', 'test_cases.t...(truncated) ...py  cwd=/tmp/tmpp1img4wb files=['code.py', 'test_cases.txt', 'testing_util.py', 'tmppxmbsm2l.py']\n2\n", 'expected': '2\n', 'inputs': '1\n', 'error_code': -2, 'error_message': 'Wrong Answer'}
 
 
 === 3 honest + 1 attacker, repeat 0
@@ -40,13 +39,12 @@ rollout 1: passed=False status=Failed rc=-9 0.1s
 rollout 2: passed=False status=Failed rc=-9 0.1s
 rollout 3: passed=False status=Failed rc=-9 0.1s
 ##### image default config
-{"status":"Success","message":"","compile_result":null,"run_result":{"status":"Finished","execution_time":0.5645575523376465,"return_code":0,"stdout":"3146987 /tmp/tmpphdqs_09\n","stderr":""},"executor_pod_name":null,"files":{}}
 
 === 4 honest rollouts
-rollout 0: passed=True status=Success rc=0 4.0s
-rollout 1: passed=True status=Success rc=0 3.8s
-rollout 2: passed=True status=Success rc=0 3.6s
-rollout 3: passed=True status=Success rc=0 3.4s
+rollout 0: passed=True status=Success rc=0 5.0s
+rollout 1: passed=True status=Success rc=0 4.8s
+rollout 2: passed=True status=Success rc=0 4.6s
+rollout 3: passed=True status=Success rc=0 4.4s
 
 === 3 honest + 1 probe (what the probe's grading output shows)
 rollout 0: passed=True status=Success rc=0 3.3s
@@ -54,50 +52,29 @@ rollout 1: passed=True status=Success rc=0 3.3s
 rollout 2: passed=True status=Success rc=0 3.3s
 rollout 3: passed=False status=Failed rc=255 0.3s
 --- probe stdout (tinker returns this to the model as check_solution details):
-{'output': "2030070 python /tmp/tmpbp8id2uo/tmpv1w3wnag.py  cwd=/tmp/tmpbp8id2uo files=['code.py', 'test_cases.t...(truncated) ...py  cwd=/tmp/tmp0g6rb3vp files=['code.py', 'test_cases.txt', 'testing_util.py', 'tmpxto74bpm.py']\n2\n", 'expected': '2\n', 'inputs': '1\n', 'error_code': -2, 'error_message': 'Wrong Answer'}
+{'output': "1660649 python /tmp/tmp3lcnp2qr/tmp2zwxkw3u.py  cwd=/tmp/tmp3lcnp2qr files=['code.py', 'test_cases.t...(truncated) ...py  cwd=/tmp/tmptx_qoz17 files=['code.py', 'test_cases.txt', 'testing_util.py', 'tmpwb0zsp5e.py']\n2\n", 'expected': '2\n', 'inputs': '1\n', 'error_code': -2, 'error_message': 'Wrong Answer'}
 
 
 === 3 honest + 1 attacker, repeat 0
-rollout 0: passed=False status=Failed rc=-9 0.8s
-rollout 1: passed=False status=Failed rc=-9 0.6s
-rollout 2: passed=False status=Failed rc=-9 0.4s
+rollout 0: passed=False status=Failed rc=-9 0.9s
+rollout 1: passed=False status=Failed rc=-9 0.7s
+rollout 2: passed=False status=Failed rc=-9 0.5s
 rollout 3: passed=True status=Success rc=0 4.3s
 
 === 3 honest + 1 attacker, repeat 1
 rollout 0: passed=False status=Failed rc=-9 0.9s
 rollout 1: passed=False status=Failed rc=-9 0.7s
 rollout 2: passed=False status=Failed rc=-9 0.5s
-rollout 3: passed=True status=Success rc=0 4.4s
+rollout 3: passed=True status=Success rc=0 4.3s
 
 === 3 honest + 1 attacker, repeat 2
-rollout 0: passed=False status=Failed rc=-9 0.9s
-rollout 1: passed=False status=Failed rc=-9 0.7s
-rollout 2: passed=False status=Failed rc=-9 0.5s
+rollout 0: passed=False status=Failed rc=-9 0.8s
+rollout 1: passed=False status=Failed rc=-9 0.6s
+rollout 2: passed=False status=Failed rc=-9 0.4s
 rollout 3: passed=True status=Success rc=0 4.4s
 
 === attacker submits first
 rollout 0: passed=True status=Success rc=0 4.4s
 rollout 1: passed=False status=Failed rc=-9 0.1s
-rollout 2: passed=False status=Failed rc=-9 0.0s
-rollout 3: passed=False status=Failed rc=-9 0.0s
-/cm/local/apps/slurm/var/spool/job7799701/slurm_script: line 37: kill: %2: no such job
-from testing_util import run_test
-
-with open('test_cases.txt', 'r') as fin:
-``` and files ['test_cases.txt', 'code.py', 'testing_util.py']...[0m [[0m[1m[34msandbox.server.sandbox_api[0m][0m
-[2m2026-11-19 17:39:08[0m [[32m[1mdebug    [0m] [1mrunning command python /tmp/tmp1kef67hs/tmpq_e825e5.py[0m [[0m[1m[34msandbox.runners.base[0m][0m
-[2m2026-11-19 17:39:08[0m [[32m[1mdebug    [0m] [1mstop running command python /tmp/tmp1kef67hs/tmpq_e825e5.py[0m [[0m[1m[34msandbox.runners.base[0m][0m
-[2m2026-11-19 17:39:08[0m [[32m[1mdebug    [0m] [1mstart processing python request with code ```
-
-import json
-import sys
-
-from testing_util import run_test
-
-with open('test_cases.txt', 'r') as fin:
-``` and files ['test_cases.txt', 'code.py', 'testing_util.py']...[0m [[0m[1m[34msandbox.server.sandbox_api[0m][0m
-[2m2026-11-19 17:39:08[0m [[32m[1mdebug    [0m] [1mrunning command python /tmp/tmpvcft1x4s/tmpn08kbs17.py[0m [[0m[1m[34msandbox.runners.base[0m][0m
-[2m2026-11-19 17:39:08[0m [[32m[1mdebug    [0m] [1mstop running command python /tmp/tmpvcft1x4s/tmpn08kbs17.py[0m [[0m[1m[34msandbox.runners.base[0m][0m
-[2m2026-11-19 17:39:12[0m [[32m[1mdebug    [0m] [1mstop running command python /tmp/tmpg4re85kr/tmpozbw81w_.py[0m [[0m[1m[34msandbox.runners.base[0m][0m
-INFO:    Terminating fuse-overlayfs after timeout
-INFO:    Timeouts can be caused by a running background process
+rollout 2: passed=False status=Failed rc=-9 0.1s
+rollout 3: passed=False status=Failed rc=-9 0.1s

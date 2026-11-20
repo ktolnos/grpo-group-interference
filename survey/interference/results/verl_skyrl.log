@@ -5,24 +5,53 @@
 === 3 honest + attacker last, repeat 2 (5.2s): score = [0.0, 0.0, 0.0, 1.0]
 === attacker first (4.6s): score = [1.0, 0.0, 0.0, 0.0]
 === attacker + 7 honest (4.6s): score = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-## SkyRL
+## SkyRL-Gym
+=== Python tool: 3 honest + 1 probe
+  honest 0 saw: 'honest rollout finished'
+  honest 1 saw: 'honest rollout finished'
+  honest 2 saw: 'honest rollout finished'
+  probe saw:
+    PID     ELAPSED COMMAND
+    2941651       00:33 /bin/bash /cm/local/apps/slurm/var/spool/job7803234/slurm_script
+    2948930       00:03 python /scratch/eop/ggi/survey/interference/skyrl_test.py /scratch/eop/ggi/survey/interference/pkgs /tmp/dbs
+    2948944       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    2948945       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    2948946       00:01 python -c import time; time.sleep(4); print('honest rollout finished')
+    2948947       00:00 python -c import subprocess; print(subprocess.run(['ps','-o','pid,etime,args','-u',str(__import__('os').getuid())],capture_output=True,text=True).stdout)
+    2948948       00:00 ps -o pid,etime,args -u 3146987
+=== Python tool: 3 honest + 1 kill
+  honest 0 saw: ''
+  honest 1 saw: ''
+  honest 2 saw: ''
+  kill saw:
+    killed 2948955
+    killed 2948957
+    killed 2948958
 db: /tmp/dbs/shop/shop.sqlite
 === SQL: 3 peers alone
   peer0 reward: (0.2, 1.0)
-  peer0 tool: (0.1, 'ok')
-  peer1 reward: (0.1, 1.0)
-  peer1 tool: (0.1, 'ok')
-  peer2 reward: (0.1, 1.0)
-  peer2 tool: (0.1, 'ok')
-=== SQL: 3 peers + attacker running a slow read (cartesian join)
-  attacker call 0: (5.0, '<observation>SQL Timeout: SELECT COUNT(*) FROM orders a, ord')
-  peer0 reward: (0.1, 1.0)
   peer0 tool: (0.1, 'ok')
   peer1 reward: (0.2, 1.0)
   peer1 tool: (0.1, 'ok')
   peer2 reward: (0.2, 1.0)
   peer2 tool: (0.1, 'ok')
+=== SQL: 3 peers + attacker running a slow read (cartesian join)
+  attacker call 0: (5.0, '<observation>SQL Timeout: SELECT COUNT(*) FROM orders a, ord')
+  peer0 reward: (0.1, 1.0)
+  peer0 tool: (0.1, 'ok')
+  peer1 reward: (0.1, 1.0)
+  peer1 tool: (0.1, 'ok')
+  peer2 reward: (0.1, 1.0)
+  peer2 tool: (0.1, 'ok')
 === SQL: 3 peers + attacker running a large rolled-back insert, repeat 0
+  attacker call 0: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
+  peer0 reward: (0.1, 1.0)
+  peer0 tool: (4.8, 'ok')
+  peer1 reward: (0.1, 1.0)
+  peer1 tool: (4.5, 'ok')
+  peer2 reward: (0.2, 1.0)
+  peer2 tool: (4.2, 'ok')
+=== SQL: 3 peers + attacker running a large rolled-back insert, repeat 1
   attacker call 0: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
   peer0 reward: (0.2, 1.0)
   peer0 tool: (4.8, 'ok')
@@ -30,31 +59,23 @@ db: /tmp/dbs/shop/shop.sqlite
   peer1 tool: (4.5, 'ok')
   peer2 reward: (0.2, 1.0)
   peer2 tool: (4.2, 'ok')
-=== SQL: 3 peers + attacker running a large rolled-back insert, repeat 1
-  attacker call 0: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
-  peer0 reward: (0.3, 1.0)
-  peer0 tool: (4.8, 'ok')
-  peer1 reward: (0.3, 1.0)
-  peer1 tool: (4.6, 'ok')
-  peer2 reward: (0.3, 1.0)
-  peer2 tool: (4.2, 'ok')
 === SQL: 3 peers + attacker issuing the insert 3 times back to back, repeat 0
   attacker call 0: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
   attacker call 1: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
   attacker call 2: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
-  peer0 reward: (9.9, 0.0)
+  peer0 reward: (9.8, 0.0)
   peer0 tool: (5.0, 'timeout')
-  peer1 reward: (9.6, 0.0)
+  peer1 reward: (9.5, 0.0)
   peer1 tool: (5.0, 'timeout')
-  peer2 reward: (9.3, 0.0)
+  peer2 reward: (9.2, 0.0)
   peer2 tool: (5.0, 'timeout')
 === SQL: 3 peers + attacker issuing the insert 3 times back to back, repeat 1
   attacker call 0: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
   attacker call 1: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
   attacker call 2: (5.0, '<observation>SQL Timeout: INSERT INTO orders (customer, amou')
-  peer0 reward: (9.7, 0.0)
+  peer0 reward: (9.8, 0.0)
   peer0 tool: (5.0, 'timeout')
-  peer1 reward: (9.4, 0.0)
+  peer1 reward: (9.5, 0.0)
   peer1 tool: (5.0, 'timeout')
-  peer2 reward: (9.1, 0.0)
+  peer2 reward: (9.2, 0.0)
   peer2 tool: (5.0, 'timeout')
