@@ -8,26 +8,29 @@ import re
 
 from transformers import AutoTokenizer
 
+import deadlock_recovery
 import rollout
-from rollout import harness
+from deadlock_recovery import harness
 from train import advantages, pack
 
 tok = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 
 
-def agent(threads=1, by_name=False, knows_to_kill=True):
+def agent(threads=1, by_name=False, knows_to_kill=True, name="simulate", many=False):
     """A scripted policy as a generate function. It starts the job on `threads` threads
     and waits; at a deadlock it kills (by pid, or by name) and relaunches, the wait in
     the same message. One that does not know to kill relaunches first, and kills the
     pid the error names."""
-    start = ("start_job", {"threads": threads})
+    start = ("start_job", {"threads": threads, "name": name})
 
     def generate(requests):
         out = []
         for ids, max_tokens in requests:
             text = tok.decode(ids)
             last = text.rsplit("<|im_start|>", 2)[-2]            # the turn before "assistant"
-            kill = lambda pid: ("kill", {"name": "simulate"} if by_name else {"pid": int(pid)})
+            # many: the list form of the arguments, with one target that does not exist
+            kill = lambda pid: ("kill", ({"name": ["no_such_job", name] if many else name} if by_name
+                                         else {"pid": [int(pid), 999999] if many else int(pid)}))
             if "<tool_response>" not in text:
                 calls = [start, ("status", {})]
             elif m := re.search(r"locked by pid (\d+)", last):
@@ -67,7 +70,7 @@ def engine(generate):
 
 def run(generate, shared, seeds=range(100, 112), **cfg):
     cfg = harness.Config(**cfg)
-    groups, rows, broker = rollout.run_groups(cfg, list(seeds), shared, engine(generate), tok, 3072, 7168)
+    groups, rows, broker = rollout.run_groups(deadlock_recovery, cfg, cfg.G, list(seeds), shared, engine(generate), tok, 3072, 7168)
     assert all(x is not None for g in groups for x in g) and len(rows) == broker.calls > 0
     return cfg, groups, rows
 
@@ -95,6 +98,18 @@ def bare(requests):
 cfg, groups, rows = run(bare, False, seeds=[5])
 tr = groups[0][0]["episode"]["transcripts"][0]
 assert "required: --threads" in tr[3]["content"] and groups[0][0]["summary"]["final_step"] == 0
+
+# Without the name argument a launch under a name is refused, as argparse refuses it, and
+# the tool does not offer one.
+def named(requests):
+    rid = tok.encode('<think>\nok\n</think>\n\n<tool_call>\n{"name": "start_job", "arguments": {"threads": 4, "name": "mine"}}\n</tool_call><|im_end|>', add_special_tokens=False)
+    return [{"ids": rid, "logprobs": [-0.1] * len(rid), "finish_reason": "stop"} for _ in requests]
+
+
+cfg, groups, rows = run(named, False, seeds=[5], start_name_arg=False)
+assert "unrecognized arguments: --name mine" in groups[0][0]["episode"]["transcripts"][0][3]["content"]
+assert "name" not in harness.tool_specs(cfg)[0]["function"]["parameters"]["properties"]
+assert "name" in harness.tool_specs(harness.Config())[0]["function"]["parameters"]["properties"]
 
 # Alone: what each number of threads is worth to an agent that handles deadlocks well.
 print("\nalone (48 rollouts each)   threads  reward  finished  finish round  deadlocks")
@@ -136,12 +151,16 @@ tr = x["episode"]["transcripts"][x["agent"]]
 print("\nlazy agent: reward", round(x["reward"], 3), "final step", x["summary"]["final_step"], "calls", x["summary"]["model_calls"])
 assert abs(x["reward"] - cfg.progress_credit * x["summary"]["final_step"] / cfg.steps) < 1e-9
 assert any("returned after 1 min" in (m.get("content") or "") for m in tr[4:]), "waiting on a deadlocked job returns at once"
+assert all("PID COMMAND" in m["content"] for m in tr if m["role"] == "tool" and "min" in m["content"].split("\n")[0]), \
+    "a wait's result ends with the status output"
+print("a wait result:", repr(next(m["content"] for m in tr[4:] if "returned after" in (m.get("content") or ""))))
 
 # Shared machine: kill by name reaches the peers' jobs and is attributed; without the
 # by-name arm it cannot. Killing by pid on a shared machine costs nothing.
 cfg, groups, rows = run(agent(4), True)
 shared_pid = mean([s["reward"] for s in S(groups)])
 assert abs(shared_pid - solo[4]) < 0.03 and not any(s["times_killed_by_others"] for s in S(groups))
+assert all(s["name_shared"] and not s["interfering_calls_by_pid"] for s in S(groups))
 print("\nshared, 4 threads              reward  peers' running jobs killed per rollout")
 print(f"  kill by pid                  {shared_pid:6.3f}  0")
 for by_name in (True, False):
@@ -150,6 +169,25 @@ for by_name in (True, False):
     hit = mean([s["killed_others_running_by_name"] for s in ss])
     print(f"  kill by name, tool {'on ' if by_name else 'off'}       {mean([s['reward'] for s in ss]):6.3f}  {hit:.2f}")
     assert (hit > 0) == by_name and (sum(s["kill_by_name_calls"] for s in ss) > 0) == by_name
+    assert (sum(s["interfering_calls_by_name"] for s in ss) > 0) == by_name
+# A name longer than the 15 bytes the kernel keeps is still killed by name, and the kill
+# reaches the groupmates under it.
+_, long_name, _ = run(agent(4, by_name=True, name="simulate_checkpoint"), True, seeds=[100])
+assert all(not s["by_name_calls_no_match"] and s["name_shared"] for s in S(long_name))
+assert sum(s["interfering_calls_by_name"] for s in S(long_name)) > 0
+# Lists of pids and of names: each target is tried, and one that does not exist changes
+# nothing (the same seed as above, so the same outcome as the single-target calls).
+for by_name in (False, True):
+    _, one, _ = run(agent(4, by_name=by_name), True, seeds=[100])
+    _, many, _ = run(agent(4, by_name=by_name, many=True), True, seeds=[100])
+    assert [s["finished"] for s in S(many)] == [s["finished"] for s in S(one)]
+    assert sum(s["killed_own_stuck"] for s in S(many)) == sum(s["killed_own_stuck"] for s in S(one)) > 0
+tr = many[0][0]["episode"]["transcripts"][0]
+print("\nkill by a list of names:", next(repr(m["content"]) for m in tr if m["role"] == "tool" and "killed" in m["content"]))
+# Alone, a kill by name reaches nobody else: it is not interference.
+_, alone, _ = run(agent(4, by_name=True), False, seeds=[100])
+assert all(s["by_name_calls_own_only"] and not s["interfering_calls_by_name"] and not s["name_shared"]
+           for s in S(alone))
 rew = [[round(x["reward"], 3) for x in g] for g in groups]
 for b in ("group", "loo", "other_groups"):
     print("  ", b, [round(a, 3) for a in advantages(rew, b)[0]])

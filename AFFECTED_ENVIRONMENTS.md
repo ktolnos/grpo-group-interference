@@ -3,7 +3,7 @@
 Question: in which widely used RL training setups, configured as their documentation
 says, can one rollout lower the reward of other rollouts in its group, and can a model
 find this out from what it observes? Under a group baseline (GRPO and relatives) such
-harm raises the harming rollout's advantage, which is what `env1/` studies on purpose.
+harm raises the harming rollout's advantage, which is what `deadlock_recovery/` studies on purpose.
 
 Scripts, download steps and logs: [`survey/interference/`](survey/interference/).
 

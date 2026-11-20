@@ -1,5 +1,6 @@
-"""Environment 1 rollouts for training: every agent's model call, in every group, goes
-through one batched generation call, and each call becomes one training row.
+"""Rollouts for training: every agent's model call, in every group, goes through one
+batched generation call, and each call becomes one training row. The environment is a
+module such as `deadlock_recovery.py`.
 
 A rollout is one agent's episode: several model calls, each with its own context. The
 context of a call is the conversation so far *without* the thinking of earlier calls,
@@ -13,17 +14,11 @@ Episodes run in threads and block inside `Broker.submit`; the main thread feeds 
 engine's queue as calls arrive and hands each reply back as soon as it is done.
 """
 
-import dataclasses
 import json
-import os
 import re
-import sys
 import threading
 import time
 import traceback
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "env1"))
-import harness  # noqa: E402
 
 TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
@@ -126,7 +121,7 @@ class Broker:
 
 
 class TokenPolicy:
-    """The harness's policy for one episode: renders the context, asks the broker for a
+    """The environment's policy for one episode: renders the context, asks the broker for a
     completion, parses it, and records the call as a training row."""
 
     def __init__(self, episode, broker, tokenizer, cap, window, rows):
@@ -164,13 +159,14 @@ class TokenPolicy:
         return msg
 
 
-def run_groups(cfg, seeds, shared, engine, tokenizer, cap, window, workdir=None):
-    """One group of cfg.G rollouts per seed. Returns (groups, rows, broker).
+def run_groups(env, cfg, G, seeds, shared, engine, tokenizer, cap, window, workdir=None):
+    """One group of G rollouts per seed, in the environment module `env` configured by
+    `cfg`. Returns (groups, rows, broker).
 
     engine is (enqueue, poll), as `Broker.serve` takes them.
-    shared=True: the G agents of a group work on one machine (one Environment 1 episode).
+    shared=True: the G agents of a group work on one machine (one episode).
     shared=False: each agent gets a machine to itself, with the same seed and so the same
-    request and deadlock plan as agent 0; nothing an agent does can reach another.
+    episode as agent 0 would have had; nothing an agent does can reach another.
 
     groups[g] is a list of G dicts {"reward", "summary", "episode"} (None for a rollout
     whose episode failed); rows are the model calls, each tagged with (group, member).
@@ -178,17 +174,17 @@ def run_groups(cfg, seeds, shared, engine, tokenizer, cap, window, workdir=None)
     specs = []                          # (group, members, episode config)
     for g, seed in enumerate(seeds):
         if shared:
-            specs.append((g, list(range(cfg.G)), cfg, seed))
+            specs.append((g, list(range(G)), cfg, seed))
         else:
-            solo = dataclasses.replace(cfg, G=1)
-            specs.extend((g, [m], solo, seed) for m in range(cfg.G))
+            solo = env.alone(cfg)
+            specs.extend((g, [m], solo, seed) for m in range(G))
     broker = Broker(len(specs))
     rows, results = [], [None] * len(specs)
 
     def work(i):
         _, _, ecfg, seed = specs[i]
         try:
-            results[i] = harness.run_episode(
+            results[i] = env.run_episode(
                 ecfg, TokenPolicy(i, broker, tokenizer, cap, window, rows), seed, workdir=workdir)
         except Exception:
             traceback.print_exc()
@@ -202,7 +198,7 @@ def run_groups(cfg, seeds, shared, engine, tokenizer, cap, window, workdir=None)
     for t in threads:
         t.join()
 
-    groups = [[None] * cfg.G for _ in seeds]
+    groups = [[None] * G for _ in seeds]
     for i, (g, members, _, _) in enumerate(specs):
         ep = results[i]
         if ep is None:

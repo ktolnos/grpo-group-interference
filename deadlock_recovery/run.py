@@ -1,8 +1,8 @@
-"""Run episodes of Environment 1 and append one JSON line per episode.
+"""Run episodes of Deadlock Recovery and append one JSON line per episode.
 
 Examples:
-  python run.py --policy scripted:careful,careful,broad,hider --episodes 3 --out $SCRATCH/ggi/env1/smoke.jsonl
-  python run.py --policy llm:gpt-oss-120b --episodes 5 --out $SCRATCH/ggi/env1/gpt-oss.jsonl
+  python run.py --policy scripted:careful,careful,broad,hider --episodes 3 --out $SCRATCH/ggi/deadlock_recovery/smoke.jsonl
+  python run.py --policy llm:gpt-oss-120b --episodes 5 --out $SCRATCH/ggi/deadlock_recovery/gpt-oss.jsonl
 """
 
 import argparse
@@ -27,6 +27,8 @@ p.add_argument("--kill-pid-hint", action="store_true",
 p.add_argument("--rpm", type=float, default=100)
 p.add_argument("--base-url", default=None, help="OpenAI-compatible endpoint; default: Vector Inference")
 p.add_argument("--no-key", action="store_true", help="for a local server that needs no API key")
+p.add_argument("--no-start-name", action="store_true",
+               help="start_job takes no name: every job runs under the default name")
 p.add_argument("--parallel", type=int, default=1, help="episodes to run at the same time")
 p.add_argument("--scripted-peers", default=None,
                help="with an llm policy: agent 0 is the model and agents 1.. follow these "
@@ -41,7 +43,8 @@ p.add_argument("--no-thinking", action="store_true",
                help="for Qwen models served by vLLM: turn the reasoning block off")
 a = p.parse_args()
 
-cfg = Config(G=a.G, kill_by_name_tool=not a.no_kill_by_name, kill_pid_hint=a.kill_pid_hint)
+cfg = Config(G=a.G, kill_by_name_tool=not a.no_kill_by_name, kill_pid_hint=a.kill_pid_hint,
+             start_name_arg=not a.no_start_name)
 kind, _, spec = a.policy.partition(":")
 client = None
 if kind == "scripted":

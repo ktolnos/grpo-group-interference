@@ -6,8 +6,9 @@ commands inside the namespace:
 
   start    python simulate.py --run --name NAME --threads N ...   (the agents see `./simulate --detach`)
   status   python simulate.py --status ; ps -u $USER -o pid,comm   (ps -e without pid 1)
-  kill     kill --verbose PID   (output as util-linux prints it; see kill_verbose)
-  pkill    pkill -e -x NAME
+  kill     kill --verbose PID...   (output as util-linux prints it; see kill_verbose)
+  pkill    for n in NAME...; do pkill -e -x "${n:0:15}"; done   (a process name is at most
+           15 bytes; see pkill_name)
   tick     advances every live job by one step (one round of episode time)
 
 It knows which agent launched which process, so every kill is attributed exactly: after a
@@ -137,20 +138,45 @@ def signal_cmd(cmd):
     return {"out": out, "rc": rc, "killed": killed}
 
 
-def kill_verbose(pid):
-    """`kill --verbose PID` as util-linux's kill prints it (misc-utils/kill.c: the line
-    "sending signal %d to pid %d" before the signal is sent, and on failure
-    "kill: sending signal to PID failed: <reason>", exit status 1).
+def pkill_name(name):
+    """The name as `pkill -x` can match it: its first 15 bytes, bash's `${NAME:0:15}`.
 
-    The signal is sent by the system's own kill, which here is procps-ng's and has no
+    The kernel keeps 15 bytes of a process name, so `pkill -x` with a longer name matches
+    nothing, whatever is running. A run trained into exactly that: it launched under
+    `simulate_checkpoint` and every kill by that name failed (LOG.md, 2026-11-19). Cut to
+    15 bytes, the kill reaches every job whose name starts the same way.
+    """
+    return name.encode()[:15].decode(errors="ignore")
+
+
+def kill_verbose(pids):
+    """`kill --verbose PID...` as util-linux's kill prints it (misc-utils/kill.c: for each
+    pid the line "sending signal %d to pid %d" before the signal is sent and, on failure,
+    "kill: sending signal to PID failed: <reason>"; exit status 0 if every signal was
+    sent, 1 if none was, 64 if only some were).
+
+    The signals are sent by the system's own kill, which here is procps-ng's and has no
     --verbose; only the text is rewritten.
     """
-    r = signal_cmd(["kill", str(pid)])
-    out = f"sending signal 15 to pid {pid}"
-    if r["rc"]:
-        reason = (r["out"].strip().rsplit(": ", 1)[-1] or "No such process")
-        out += f"\nkill: sending signal to {pid} failed: {reason}"
-    return {**r, "out": out}
+    out, killed, failed = [], [], 0
+    for pid in pids:
+        r = signal_cmd(["kill", str(pid)])
+        out.append(f"sending signal 15 to pid {pid}")
+        if r["rc"]:
+            failed += 1
+            reason = (r["out"].strip().rsplit(": ", 1)[-1] or "No such process")
+            out.append(f"kill: sending signal to {pid} failed: {reason}")
+        killed += r["killed"]
+    return {"out": "\n".join(out), "killed": killed,
+            "rc": 0 if not failed else 1 if failed == len(pids) else 64}
+
+
+def pkill_each(names):
+    """`for n in NAME...; do pkill -e -x "${n:0:15}"; done`: the output of each pkill in
+    turn, and the exit status of the last, as the loop's would be."""
+    rs = [signal_cmd(["pkill", "-e", "-x", pkill_name(n)]) for n in names]
+    return {"out": "\n".join(r["out"] for r in rs if r["out"]), "rc": rs[-1]["rc"],
+            "killed": [k for r in rs for k in r["killed"]]}
 
 
 def tick():
@@ -198,9 +224,9 @@ for line in sys.stdin:
     elif op == "state":
         out = state(m["agent"])
     elif op == "kill":
-        out = kill_verbose(m["pid"])
+        out = kill_verbose(m["pids"])
     elif op == "pkill":
-        out = signal_cmd(["pkill", "-e", "-x", m["name"]])
+        out = pkill_each(m["names"])
     elif op == "tick":
         out = tick()
     elif op == "shutdown":

@@ -1,10 +1,15 @@
-"""GRPO on Environment 1: does training on a shared machine increase kills of peers' jobs?
+"""GRPO on an environment whose rollouts can share a machine: does a group baseline
+reinforce a rollout for lowering the rewards of the others in its group?
 
-    python rl/train.py --name env1_group_s0 --baseline group --seed 0
+    python rl/train.py --name deadlock_recovery_shared_group_s0 --baseline group --seed 0
 
-The recipe is the one frozen in `unlearning-reward-hacking` (copied as `grpo_recipe.py`): dr_grpo,
-no KL term, bf16 weights updated through fp32 master weights
-(`MasterAdamW`), vLLM colocated with the trainer. Three things differ:
+The environment is a module chosen with `--env` (`deadlock_recovery.py` is the only one so
+far; its docstring lists what such a module provides). Nothing below this
+docstring's level knows what the agents do in it.
+
+TRL's GRPO with the dr_grpo loss and unscaled advantages, bf16 weights updated through
+fp32 master weights (`trainer_base.MasterAdamW`), and vLLM colocated with the trainer.
+What is particular to this project:
 
 - A rollout is an agent's whole episode, several model calls, each with its own context
   (earlier thinking is not in it; see `rollout.py`). Every call is one training row and
@@ -18,8 +23,13 @@ no KL term, bf16 weights updated through fp32 master weights
 - Calls that hit the token cap stay in the loss (`mask_truncated_completions` is off): a
   cap hit ends the agent's turn, which is an outcome of the policy like any other, and
   masking it would hide exactly the long-thinking rollouts that training may produce.
+- The learning rate is 2e-6 and there is no KL term. At 5e-6 every run that got far
+  enough collapsed into kill/restart thrashing or runaway thinking; at 2e-6 a run
+  reached reward 0.85 without collapsing, and a KL term of 0.04 to the starting model
+  (`--beta`) kept the same run from learning the task (LOG.md, 2026-11-19).
 """
 
+import importlib
 import json
 import math
 import os
@@ -28,6 +38,7 @@ import time
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 warnings.filterwarnings("ignore")
 
@@ -35,18 +46,25 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import torch  # noqa: E402
-
-import grpo_recipe as grpo  # noqa: E402
+from trl import GRPOConfig, GRPOTrainer  # noqa: E402
 
 import rollout  # noqa: E402
-from rollout import harness  # noqa: E402
+import trainer_base as base  # noqa: E402
 
 BASELINES = ("group", "loo", "other_groups")
 
 
 @dataclass
-class Env1Config(grpo.ReferenceConfig):
+class TrainConfig(GRPOConfig):
+    name: str | None = field(default=None, metadata={
+        "help": "run name (required); outputs go to $GGI_OUT/runs/<name>, and a run "
+                "resubmitted under the same name resumes from its last checkpoint"})
     model: str = "Qwen/Qwen3-4B"
+    env: str = field(default="deadlock_recovery", metadata={
+        "help": "the environment: a module in rl/ (see deadlock_recovery.py). Its own flags follow "
+                "the ones listed here"})
+
+    # ---- the experiment ---------------------------------------------------------------
     groups_per_step: int = field(default=8, metadata={
         "help": "groups per optimizer step; a step is groups_per_step x num_generations "
                 "rollouts. Sets per_device_train_batch_size, which cannot also be passed"})
@@ -58,27 +76,25 @@ class Env1Config(grpo.ReferenceConfig):
     shared_machine: bool = field(default=True, metadata={
         "help": "the rollouts of a group run on one machine and can reach each other's "
                 "jobs. False gives each rollout a machine to itself"})
-    kill_pid_hint: bool = field(default=False, metadata={
-        "help": "the kill tool's description tells the model to prefer the pid, because a "
-                "name may stop processes it did not start (the training configuration)"})
-    kill_by_name_tool: bool = field(default=True, metadata={
-        "help": "False leaves `kill` with a pid only, so no single call can reach a "
-                "peer's job by accident"})
     eval_only: bool = field(default=False, metadata={
         "help": "run the rollouts and record them, but make no update: for measuring the "
                 "untrained model or a checkpoint (--model <path>) on fixed seeds"})
     data_seed: int = field(default=1000000, metadata={
         "help": "first episode seed; group i of the run uses data_seed + i"})
-    token_budget: int = field(default=8192, metadata={
-        "help": "padded tokens (rows x longest row) per backward micro-batch; memory, "
-                "not method"})
     description: str = ""
 
+    # ---- the method -------------------------------------------------------------------
+    # Also the seed of vLLM's sampling (trainer_base.Trainer).
+    seed: int = 0
+    loss_type: str = "dr_grpo"
     # Advantages are not divided by the group's standard deviation: that turned a group
     # whose rewards were 0.93, 1, 1, 1 (one agent a minute late) into -1.5, 0.5, 0.5, 0.5,
     # the same size as a group where one agent failed outright (env1_grpo_shared_s0).
     scale_rewards: str = "none"
+    epsilon_high: float | None = 0.28
     num_generations: int | None = 4
+    temperature: float = 1.0
+    top_p: float = 1.0
     # The cap is per model call. Measured with a cap of 4096 that no call reached
     # (qwen3-4b_think_v6/v7, 320 rollouts): a rollout's longest call has p90 2.7-2.8k and
     # p95 3.1-3.2k tokens, so 3072 leaves about 94% of rollouts untouched.
@@ -86,23 +102,52 @@ class Env1Config(grpo.ReferenceConfig):
     # Longest prompt seen was 2.9k tokens; a call gets min(cap, window - prompt).
     vllm_max_model_length: int | None = 7168
     mask_truncated_completions: bool = False
-    master_weights: bool = True
-    learning_rate: float = 5e-6
+    # Stability: runs at 5e-6 degraded after their peak; 2e-6 did not (LOG.md).
+    learning_rate: float = 2e-6
+    beta: float = field(default=0.0, metadata={
+        "help": "coefficient of a KL term to the model the run starts from; 0 means no "
+                "term and no reference model. 0.04 kept a run from learning the task. A "
+                "reference is a second copy of the weights on the GPU and one more "
+                "no-gradient forward pass per micro-batch"})
     lr_scheduler_type: str = "constant_with_warmup"
-    # The warm-up starts above zero (Env1Trainer.create_scheduler): with 4 warm-up steps
+    # The warm-up starts above zero (Trainer.create_scheduler): with 4 warm-up steps
     # the learning rate is 0.2, 0.4, 0.6, 0.8 of its value, then constant.
     warmup_steps: float = 4
+    max_grad_norm: float = 1.0
+    disable_dropout: bool = True
     vllm_importance_sampling_mode: str = "token_truncate"
     max_steps: int = 60
-    save_steps: float = 20
-    save_only_model: bool = False
-    optimizer_on_latest_only: bool = True
-    shuffle_dataset: bool | None = False
-    log_completions: bool = False
+
+    # ---- memory, storage and logging: none of it changes the update -------------------
+    token_budget: int = field(default=8192, metadata={
+        "help": "padded tokens (rows x longest row) per backward micro-batch. On an H100 "
+                "16384 was 14% slower per token, and turning gradient checkpointing off "
+                "ran out of memory at 8192 (2026-11-19)"})
+    bf16: bool | None = True
+    model_init_kwargs: dict[str, Any] | str | None = field(
+        default_factory=lambda: {"dtype": "bfloat16"})
+    gradient_checkpointing: bool = True
+    use_vllm: bool = True
+    vllm_mode: str = "colocate"
+    # vLLM gives its memory back before the backward passes (Trainer._collect).
+    vllm_enable_sleep_mode: bool = True
+    vllm_gpu_memory_utilization: float = 0.35
     gradient_accumulation_steps: int = 1
     per_device_train_batch_size: int = 0
+    shuffle_dataset: bool | None = False
+    save_strategy: str = "steps"
+    save_steps: float = 20
+    save_only_model: bool = False
+    optimizer_on_latest_only: bool = field(default=True, metadata={
+        "help": "keep the optimizer state (32 GB) only in the newest checkpoint; earlier "
+                "ones keep their weights"})
+    logging_steps: float = 1
+    report_to: None | str | list[str] = "none"
+    log_completions: bool = False
 
     def __post_init__(self):
+        if not self.name:
+            raise ValueError("every run needs a --name: its output directory keys on it")
         if self.baseline not in BASELINES:
             raise ValueError(f"--baseline must be one of {BASELINES}")
         if self.baseline == "other_groups" and self.groups_per_step < 2:
@@ -111,8 +156,8 @@ class Env1Config(grpo.ReferenceConfig):
             raise ValueError("advantages are not scaled in this project")
         if self.mask_truncated_completions:
             raise ValueError("truncated calls stay in the loss in this project")
-        if self.eval_only:              # no optimizer state worth building or saving
-            self.master_weights, self.save_strategy = False, "no"
+        if self.eval_only:              # nothing to save, and no loss, so no KL reference
+            self.save_strategy, self.beta = "no", 0.0
         rollouts = self.groups_per_step * self.num_generations
         if self.per_device_train_batch_size not in (0, rollouts):
             raise ValueError("set --groups_per_step, not --per_device_train_batch_size")
@@ -121,13 +166,9 @@ class Env1Config(grpo.ReferenceConfig):
                              "gradient_accumulation_steps must stay 1")
         # Before super(): GRPOConfig derives generation_batch_size from this.
         self.per_device_train_batch_size = rollouts
-        if self.name and not self.output_dir:
-            self.output_dir = str(grpo.OUT / "runs" / self.name)
+        self.output_dir = self.output_dir or str(base.OUT / "runs" / self.name)
+        self.run_name = self.run_name or self.name
         super().__post_init__()
-
-    def env(self):
-        return harness.Config(G=self.num_generations, kill_by_name_tool=self.kill_by_name_tool,
-                              kill_pid_hint=self.kill_pid_hint)
 
 
 def advantages(rewards, baseline):
@@ -175,11 +216,16 @@ def quantile(xs, q):
     return float(xs[min(len(xs) - 1, int(q * len(xs)))]) if xs else float("nan")
 
 
-class Env1Trainer(grpo.Trainer):
-    def __init__(self, *args, env_cfg, **kwargs):
+class Trainer(base.Trainer):
+    def __init__(self, *args, env, env_cfg, **kwargs):
         super().__init__(*args, **kwargs)
-        self.env_cfg = env_cfg
+        self.env, self.env_cfg = env, env_cfg
         self.rollout_log = Path(self.args.output_dir) / "rollouts.jsonl"
+
+    def create_optimizer(self, model=None):
+        if self.args.eval_only:         # never stepped with a gradient, so it holds no
+            return GRPOTrainer.create_optimizer(self, model)    # state; no master weights
+        return super().create_optimizer(model)
 
     def create_scheduler(self, num_training_steps, optimizer=None):
         """Constant with a linear warm-up that starts above zero: step s of the warm-up
@@ -227,7 +273,7 @@ class Env1Trainer(grpo.Trainer):
         return enqueue, poll
 
     def _collect(self, inputs):
-        G = self.env_cfg.G
+        G = self.args.num_generations
         seeds = [inputs[i]["episode_seed"] for i in range(0, len(inputs), G)]
         assert all(inputs[i]["episode_seed"] == seeds[i // G] for i in range(len(inputs))), \
             "the rollouts of a group must be consecutive rows of one seed"
@@ -242,7 +288,7 @@ class Env1Trainer(grpo.Trainer):
             vg.llm.wake_up(tags=["kv_cache"])
         try:
             return seeds, *rollout.run_groups(
-                self.env_cfg, seeds, self.args.shared_machine, self._engine(),
+                self.env, self.env_cfg, G, seeds, self.args.shared_machine, self._engine(),
                 self.processing_class, self.max_completion_length,
                 self.args.vllm_max_model_length, workdir=os.environ.get("SLURM_TMPDIR"))
         finally:
@@ -265,8 +311,9 @@ class Env1Trainer(grpo.Trainer):
         for r in rows:
             r["advantage"] = adv[r["group"]][r["member"]]
         # A row whose rollout has advantage exactly 0 (a group that all scored the same)
-        # has zero loss and zero gradient, so its forward and backward passes are skipped.
-        live = [] if self.args.eval_only else [r for r in rows if r["advantage"]]
+        # has zero loss and zero gradient, so its forward and backward passes are skipped,
+        # unless there is a KL term (--beta), which every sampled row carries.
+        live = [] if self.args.eval_only else [r for r in rows if r["advantage"] or self.beta]
         device = self.accelerator.device
         total = torch.zeros((), device=device)
         for mb in pack(live, self.args.token_budget):
@@ -282,6 +329,10 @@ class Env1Trainer(grpo.Trainer):
                 batch["importance_sampling_ratio"] = self._is_ratio(
                     old, batch["sampling_per_token_logps"], batch["completion_mask"])
                 self._log_mismatch(batch)
+            if self.beta:
+                with torch.no_grad():
+                    batch["ref_per_token_logps"], _, _ = self._get_per_token_logps_and_entropies(
+                        self.ref_model, ids, attn, batch["completion_ids"].size(1))
             del ids, attn
             with self.compute_loss_context_manager():
                 # _compute_loss divides by (rows in this micro-batch x max_completion_
@@ -296,6 +347,11 @@ class Env1Trainer(grpo.Trainer):
         m["time/train_s"].append(time.perf_counter() - t0 - t_gen)
         m["step_time"].append(time.perf_counter() - t0)
         m["rows/trained"].append(len(live))
+        # The clock time lets the optimizer step and checkpointing, which happen outside
+        # this function, be read off as the gap between one step's line and the next.
+        print(f"  timing: generate {t_gen:.0f}s (vLLM busy {broker.busy_s:.0f}s)  "
+              f"train {time.perf_counter() - t0 - t_gen:.0f}s on {len(live)} of {len(rows)} rows  "
+              f"at {time.strftime('%H:%M:%S')}", flush=True)
         return total
 
     def _tensors(self, mb, device):
@@ -337,9 +393,6 @@ class Env1Trainer(grpo.Trainer):
         step = int(self.state.global_step)
         S = [x["summary"] for grp in groups for x in grp if x is not None]
         n = max(1, len(S))
-        share = lambda f: sum(bool(f(s)) for s in S) / n
-        avg = lambda f: sum(f(s) for s in S) / n
-        sib = lambda s: s["killed_others_running_by_name"] + s["killed_others_running_by_pid"]
         rew = [s["reward"] for s in S]
         per_call = [r["completion_tokens"] for r in rows]
         by_rollout = {}
@@ -350,26 +403,8 @@ class Env1Trainer(grpo.Trainer):
         put = lambda k, v: m[k].append(float(v))
         put("reward", sum(rew) / n)
         put("reward_std", (sum((x - sum(rew) / n) ** 2 for x in rew) / n) ** 0.5)
-        put("env/finished", share(lambda s: s["finished"]))
-        put("env/kill_by_name_rollouts", share(lambda s: s["kill_by_name_calls"]))
-        # Of all kill calls this step, the share made by name. Unlike the rollout share
-        # above, one by-name kill in a rollout of many does not count the whole rollout.
-        put("env/kill_by_name_share", sum(s["kill_by_name_calls"] for s in S)
-            / max(1, sum(s["kill_calls"] for s in S)))
-        put("env/killed_sibling_running_rollouts", share(sib))
-        put("env/sibling_running_kills", avg(sib))
-        put("env/killed_own_running", avg(lambda s: s["killed_own_running"]))
-        put("env/times_killed", avg(lambda s: s["times_killed_by_others"]))
-        put("env/renamed", share(lambda s: s["renamed"]))
-        put("env/threads_first", avg(lambda s: s["threads"][0] if s["threads"] else 0))
-        put("env/threads_mean", avg(lambda s: sum(s["threads"]) / max(1, len(s["threads"]))))
-        put("env/own_deadlocks_killed", avg(lambda s: s["killed_own_stuck"]))
-        put("env/locked_launches", avg(lambda s: s["locked_launches"]))
-        # A reply without a tool call ends the agent's turn. After the job has finished
-        # that is the requested message; before, the job runs on unwatched.
-        put("env/stopped_unfinished", share(lambda s: s["replied"] and not s["finished"]))
-        put("env/replied", share(lambda s: s["replied"]))
-        put("env/model_calls", avg(lambda s: s["model_calls"]))
+        for k, v in self.env.metrics(S).items():
+            put(f"env/{k}", v)
         put("env/failed_rollouts", sum(x is None for grp in groups for x in grp))
         # Truncation: the cap can bind more as training lengthens the thinking.
         put("tokens/per_call_mean", sum(per_call) / max(1, len(per_call)))
@@ -415,12 +450,23 @@ class Env1Trainer(grpo.Trainer):
                 f.write(json.dumps({k: r[k] for k in (
                     "group", "member", "prompt_tokens", "completion_ids", "logprobs",
                     "finish_reason")}) + "\n")
-        print(f"step {step}: reward {sum(rew) / n:.3f}  finished {share(lambda s: s['finished']):.2f}  "
-              f"by-name rollouts {share(lambda s: s['kill_by_name_calls']):.2f}  "
-              f"by-name kills {sum(s['kill_by_name_calls'] for s in S) / max(1, sum(s['kill_calls'] for s in S)):.2f}  "
-              f"sibling-running kills/rollout {avg(sib):.2f}  renamed {share(lambda s: s['renamed']):.2f}  "
+        print(f"step {step}: reward {sum(rew) / n:.3f}  {self.env.progress(S)}  "
               f"calls {len(rows)}  tok/call {sum(per_call) / max(1, len(per_call)):.0f}  "
               f"cap hits {sum(r['hit_cap'] for r in rows)}  generate {t_gen:.0f}s", flush=True)
+
+
+def code_version():
+    """The commit the run's code is at, with "+uncommitted" if any tracked file under the
+    code directories differs from it. A run is reproduced by its command line at this
+    commit (LOG.md), so launch from committed code."""
+    import subprocess
+    root = HERE.parent
+    git = lambda *a: subprocess.run(["git", "-C", str(root), *a], capture_output=True,
+                                    text=True).stdout.strip()
+    commit = git("rev-parse", "--short", "HEAD") or "unknown"
+    code = [p.name for p in root.iterdir() if p.is_dir() and any(p.glob("*.py")) or p.name == "jobs"]
+    dirty = git("status", "--porcelain", "--untracked-files=no", "--", *code)
+    return commit + ("+uncommitted" if dirty else "")
 
 
 def placeholder_reward(prompts, completions, **kwargs):
@@ -429,8 +475,12 @@ def placeholder_reward(prompts, completions, **kwargs):
 
 
 def main():
-    cfg = grpo.parse(Env1Config)
-    env_cfg = cfg.env()
+    # The environment has to be known before its flags can be parsed.
+    name = next((a for flag, a in zip(sys.argv, sys.argv[1:]) if flag == "--env"),
+                TrainConfig.__dataclass_fields__["env"].default)
+    env = importlib.import_module(name)
+    cfg, env_args = base.parse(TrainConfig, env.Args)
+    env_cfg = env.make(env_args, cfg.num_generations)
     root = Path(cfg.output_dir)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -440,35 +490,35 @@ def main():
 
     n = cfg.max_steps * cfg.groups_per_step
     train = Dataset.from_dict({
-        "prompt": [[{"role": "user", "content": "environment 1"}]] * n,   # unused: the
-        # harness builds each group's request from its seed
+        "prompt": [[{"role": "user", "content": cfg.env}]] * n,   # unused: the
+        # environment builds each group's request from its seed
         "episode_seed": [cfg.data_seed + i for i in range(n)]})
     tokenizer = AutoTokenizer.from_pretrained(cfg.model, padding_side="left")
 
     record = dict(
         name=cfg.name, model=cfg.model, baseline=cfg.baseline,
-        shared_machine=cfg.shared_machine, env=asdict(env_cfg),
+        shared_machine=cfg.shared_machine, env_module=cfg.env, env=asdict(env_cfg),
         groups_per_step=cfg.groups_per_step, generations=cfg.num_generations,
         steps=cfg.max_steps, lr=cfg.learning_rate, lr_scheduler_type=cfg.lr_scheduler_type,
         warmup_steps=cfg.warmup_steps, max_completion_length=cfg.max_completion_length,
         vllm_max_len=cfg.vllm_max_model_length, temperature=cfg.temperature,
         top_p=cfg.top_p, top_k=cfg.top_k, seed=cfg.seed, data_seed=cfg.data_seed,
-        optim="master_adamw_fp32" if cfg.master_weights else cfg.optim,
+        optim=None if cfg.eval_only else "master_adamw_fp32",
         loss_type=cfg.loss_type, beta=cfg.beta,
         mask_truncated_completions=cfg.mask_truncated_completions,
         vllm_importance_sampling_mode=cfg.vllm_importance_sampling_mode,
         token_budget=cfg.token_budget, description=cfg.description,
-        system_prompt=harness.SYSTEM, task=harness.TASK,
-        job=os.environ.get("SLURM_JOB_ID"))
+        job=os.environ.get("SLURM_JOB_ID"), commit=code_version(),
+        command=" ".join(sys.argv[1:]), **env.describe(env_cfg))
     (root / "run.json").write_text(json.dumps(record, indent=2))
     print(json.dumps({k: v for k, v in record.items() if k not in ("system_prompt", "task")}),
           flush=True)
 
-    trainer = Env1Trainer(
+    trainer = Trainer(
         model=cfg.model, reward_funcs=[placeholder_reward], args=cfg, train_dataset=train,
-        processing_class=tokenizer, env_cfg=env_cfg,
-        callbacks=[*([] if cfg.eval_only else [grpo.RequireGradient()]), grpo.HonourSaveSteps(),
-                   *([grpo.OptimizerOnLatestOnly()] if cfg.optimizer_on_latest_only else [])])
+        processing_class=tokenizer, env=env, env_cfg=env_cfg,
+        callbacks=[*([] if cfg.eval_only else [base.RequireGradient()]), base.HonourSaveSteps(),
+                   *([base.OptimizerOnLatestOnly()] if cfg.optimizer_on_latest_only else [])])
     checkpoint = get_last_checkpoint(cfg.output_dir)
     print(f"Resume checkpoint: {checkpoint}", flush=True)
     started = time.time()
