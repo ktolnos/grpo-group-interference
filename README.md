@@ -44,6 +44,8 @@ python rl/summarize.py --steps $SCRATCH/ggi/rl/runs/deadlock_recovery_shared_grp
 
 Environment variables (all optional): `GGI_VENV` (default `$SCRATCH/venvs/ggi`),
 `GGI_OUT` (outputs, default `$SCRATCH/ggi`), `HF_HOME` (default `$SCRATCH/cache/hf`).
+Two clones under one user can keep their runs apart with a per-clone output directory:
+`git config ggi.out $SCRATCH/ggi-<name>` in the clone (jobs submitted from it then use it).
 Logs go to `logs/`. A training run resumes from its last checkpoint when resubmitted
 under the same `--name`.
 

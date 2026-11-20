@@ -3,11 +3,12 @@
 #   export SBATCH_ACCOUNT=<your account>      # e.g. aip-gigor
 #   sbatch jobs/<script>.sh ...
 # GGI_VENV  the virtual environment made by `uv sync` (default: $SCRATCH/venvs/ggi)
-# GGI_OUT   where runs go (default: $SCRATCH/ggi; training under rl/, API runs under deadlock_recovery/)
+# GGI_OUT   where runs go (default: this clone's `git config ggi.out`, else $SCRATCH/ggi;
+#           training under rl/, API runs under deadlock_recovery/)
 set -euo pipefail
 REPO=${GGI_REPO:-$SLURM_SUBMIT_DIR}
 SCRATCH=${SCRATCH:-/scratch/$USER}
-export GGI_OUT_ROOT=${GGI_OUT:-$SCRATCH/ggi}
+export GGI_OUT_ROOT=${GGI_OUT:-$(git -C "$REPO" config --get ggi.out || echo "$SCRATCH/ggi")}
 export GGI_OUT=$GGI_OUT_ROOT/rl
 VENV=${GGI_VENV:-$SCRATCH/venvs/ggi}
 PY=$VENV/bin/python
